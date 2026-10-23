@@ -1,0 +1,7 @@
+{
+  "name": "trainext",
+  "integrations": {
+    "capacitor": {}
+  },
+  "type": "vue-vite"
+}
