@@ -6,11 +6,13 @@
   import * as csvLib from '@/lib/csv';
   import * as exportLib from '@/lib/exportUtils';
   import ProofViewerModal from '@/components/ProofViewerModal.vue';
+  import ProfileSettingsModal from '@/components/ProfileSettingsModal.vue';
 
   const router = useRouter();
   const authStore = useAuthStore();
 
   // UI State
+  const isProfileSettingsOpen = ref(false);
   const loading = ref(true);
   const searchQuery = ref('');
   const statusFilter = ref<'all' | 'on_duty' | 'in_transit' | 'safe_at_base' | 'idle'>('all');
@@ -172,7 +174,7 @@
       <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
       <div class="trainext-container-layout">
-        <!-- HEADER BAR -->
+      <!-- HEADER BAR -->
         <header class="trainext-glass-card trainext-header-bar">
           <div class="trainext-brand-group">
             <img src="/assets/trainext-logo.png" alt="TraiNext" class="trainext-logo-mini" />
@@ -182,16 +184,30 @@
             </div>
           </div>
 
-          <button 
-            type="button" 
-            @click="authStore.signOut(); router.push('/auth');"
-            class="trainext-btn-signout"
-          >
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-            <span>Sign Out</span>
-          </button>
+          <div class="flex items-center gap-2">
+            <button 
+              type="button" 
+              @click="isProfileSettingsOpen = true"
+              class="px-3.5 py-1.5 rounded-full border border-white/20 text-xs text-slate-300 hover:text-white hover:border-[#00d9ff]/50 transition flex items-center gap-1.5 cursor-pointer"
+              title="Account Settings"
+            >
+              <svg class="w-3.5 h-3.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+              <span class="hidden sm:inline">Settings</span>
+            </button>
+
+            <button 
+              type="button" 
+              @click="authStore.signOut(); router.push('/auth');"
+              class="trainext-btn-signout"
+            >
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              <span>Sign Out</span>
+            </button>
+          </div>
         </header>
 
         <!-- METRICS SNAPSHOT -->
@@ -337,6 +353,12 @@
       </div>
 
       <!-- MODAL -->
+      <ProfileSettingsModal 
+        :is-open="isProfileSettingsOpen"
+        @close="isProfileSettingsOpen = false"
+        @saved="authStore.fetchProfile()"
+      />
+      
       <ProofViewerModal 
         :is-open="isProofViewerOpen"
         :media-url="activeProofUrl"

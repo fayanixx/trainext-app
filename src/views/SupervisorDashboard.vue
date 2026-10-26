@@ -4,15 +4,18 @@
   import { supabase } from '@/lib/supabase';
   import { useAuthStore } from '@/stores/auth';
   import { useAccomplishmentsStore } from '@/stores/accomplishments';
+  import { sendStatusEmail } from '@/lib/email';
   import type { CompanySite } from '@/types';
   import OfficeGeofenceModal from '@/components/OfficeGeofenceModal.vue';
   import ProofViewerModal from '@/components/ProofViewerModal.vue';
+  import ProfileSettingsModal from '@/components/ProfileSettingsModal.vue';
 
   const router = useRouter();
   const authStore = useAuthStore();
   const accomplishmentsStore = useAccomplishmentsStore();
 
   // Modals State
+  const isProfileSettingsOpen = ref(false);
   const isGeofenceModalOpen = ref(false);
   const isProofViewerOpen = ref(false);
   const activeProofUrl = ref<string | null>(null);
@@ -108,25 +111,40 @@
     }
   };
 
-  // Accomplishment Review Actions
-  const handleReview = async (logId: string, status: 'approved' | 'rejected') => {
-    const feedback = reviewFeedback.value[logId] || '';
-    try {
-      if (typeof (accomplishmentsStore as any).reviewLog === 'function') {
-        try {
-          await (accomplishmentsStore as any).reviewLog({ logId, status, feedback });
-        } catch {
-          await (accomplishmentsStore as any).reviewLog(logId, status, feedback);
+    // Accomplishment Review Actions na may Kasamang Email Alert
+    const handleReview = async (logId: string, status: 'approved' | 'rejected') => {
+      const feedback = reviewFeedback.value[logId] || '';
+      const targetLog: any = allLogs.value.find((l: any) => l.id === logId);
+
+      try {
+        if (typeof (accomplishmentsStore as any).reviewLog === 'function') {
+          try {
+            await (accomplishmentsStore as any).reviewLog({ logId, status, feedback });
+          } catch {
+            await (accomplishmentsStore as any).reviewLog(logId, status, feedback);
+          }
         }
+
+        // Dispatch EmailJS Notification sa Intern (kung may email na kasamang na-fetch)
+        const internEmail = targetLog?.intern?.email || targetLog?.intern_email;
+        if (internEmail) {
+          await sendStatusEmail({
+            toEmail: internEmail,
+            toName: targetLog?.intern?.full_name || 'Trainee',
+            status: status,
+            feedback: feedback,
+            reportTitle: targetLog?.title || 'Daily Accomplishment Report',
+          });
+        }
+
+        reviewFeedback.value[logId] = '';
+        if (authStore.user?.id) {
+          await accomplishmentsStore.fetchSupervisorLogs(authStore.user.id);
+        }
+      } catch (err: any) {
+        alert(`Review failed: ${err.message}`);
       }
-      reviewFeedback.value[logId] = '';
-      if (authStore.user?.id) {
-        await accomplishmentsStore.fetchSupervisorLogs(authStore.user.id);
-      }
-    } catch (err: any) {
-      alert(`Review failed: ${err.message}`);
-    }
-  };
+    };
 
   // Batch Approve
   const toggleSelectAll = () => {
@@ -138,25 +156,43 @@
     }
   };
 
-  const handleBatchApprove = async () => {
-    if (selectedBatchIds.value.length === 0) return;
-    isBatchProcessing.value = true;
-    try {
-      if (typeof (accomplishmentsStore as any).batchApproveLogs === 'function') {
-        await (accomplishmentsStore as any).batchApproveLogs(selectedBatchIds.value);
-      } else if (typeof (accomplishmentsStore as any).batchApprove === 'function') {
-        await (accomplishmentsStore as any).batchApprove(selectedBatchIds.value);
+    const handleBatchApprove = async () => {
+      if (selectedBatchIds.value.length === 0) return;
+      isBatchProcessing.value = true;
+      try {
+        const logsToApprove: any[] = allLogs.value.filter((l: any) => selectedBatchIds.value.includes(l.id));
+
+        if (typeof (accomplishmentsStore as any).batchApproveLogs === 'function') {
+          await (accomplishmentsStore as any).batchApproveLogs(selectedBatchIds.value);
+        } else if (typeof (accomplishmentsStore as any).batchApprove === 'function') {
+          await (accomplishmentsStore as any).batchApprove(selectedBatchIds.value);
+        }
+
+        // Magpadala ng notification sa bawat approved intern
+        await Promise.allSettled(
+          logsToApprove.map((log: any) => {
+            const internEmail = log?.intern?.email || log?.intern_email;
+            if (!internEmail) return Promise.resolve();
+            return sendStatusEmail({
+              toEmail: internEmail,
+              toName: log?.intern?.full_name || 'Trainee',
+              status: 'approved',
+              feedback: 'Batch approved by supervisor.',
+              reportTitle: log?.title || 'Daily Accomplishment Report',
+            });
+          })
+        );
+
+        selectedBatchIds.value = [];
+        if (authStore.user?.id) {
+          await accomplishmentsStore.fetchSupervisorLogs(authStore.user.id);
+        }
+      } catch (err: any) {
+        alert(`Batch approval error: ${err.message}`);
+      } finally {
+        isBatchProcessing.value = false;
       }
-      selectedBatchIds.value = [];
-      if (authStore.user?.id) {
-        await accomplishmentsStore.fetchSupervisorLogs(authStore.user.id);
-      }
-    } catch (err: any) {
-      alert(`Batch approval error: ${err.message}`);
-    } finally {
-      isBatchProcessing.value = false;
-    }
-  };
+    };
 
   // Inspect Media
   const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: string) => {
@@ -191,7 +227,7 @@
       <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
       <div class="trainext-container-layout">
-        <!-- HEADER BAR -->
+      <!-- HEADER BAR -->
         <header class="trainext-glass-card trainext-header-bar">
           <div class="trainext-brand-group">
             <img src="/assets/trainext-logo.png" alt="TraiNext" class="trainext-logo-mini" />
@@ -201,16 +237,30 @@
             </div>
           </div>
 
-          <button 
-            type="button" 
-            @click="authStore.signOut(); router.push('/auth');"
-            class="trainext-btn-signout"
-          >
-            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-            <span>Sign Out</span>
-          </button>
+          <div class="flex items-center gap-2">
+            <button 
+              type="button" 
+              @click="isProfileSettingsOpen = true"
+              class="px-3.5 py-1.5 rounded-full border border-white/20 text-xs text-slate-300 hover:text-white hover:border-[#00d9ff]/50 transition flex items-center gap-1.5 cursor-pointer"
+              title="Account Settings"
+            >
+              <svg class="w-3.5 h-3.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+              <span class="hidden sm:inline">Settings</span>
+            </button>
+
+            <button 
+              type="button" 
+              @click="authStore.signOut(); router.push('/auth');"
+              class="trainext-btn-signout"
+            >
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+              <span>Sign Out</span>
+            </button>
+          </div>
         </header>
 
         <!-- GEOFENCE OFFICE SITE MANAGEMENT CARD -->
@@ -491,6 +541,12 @@
       </div>
 
       <!-- MODALS -->
+      <ProfileSettingsModal 
+        :is-open="isProfileSettingsOpen"
+        @close="isProfileSettingsOpen = false"
+        @saved="authStore.fetchProfile()"
+      />
+
       <OfficeGeofenceModal 
         :is-open="isGeofenceModalOpen"
         :supervisor-id="authStore.user?.id || ''"

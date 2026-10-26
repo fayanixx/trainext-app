@@ -200,3 +200,56 @@ create policy "Interns can delete own pending accomplishments"
 drop policy if exists "Supervisors can update assigned accomplishments" on public.accomplishment_logs;
 create policy "Supervisors can update assigned accomplishments" 
   on public.accomplishment_logs for update using (auth.uid() = supervisor_id);
+
+  -- ========================================================
+-- STORAGE BUCKET: proofs SETUP & POLICIES
+-- ========================================================
+
+-- 1. Lumikha ng public storage bucket kung wala pa
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('proofs', 'proofs', true)
+ON CONFLICT (id) DO NOTHING;
+
+-- 2. Policy: Payagan ang Interns na mag-upload sa sarili nilang folder (${user_id}/*)
+CREATE POLICY "Interns can upload their own proofs"
+ON storage.objects FOR INSERT
+TO authenticated
+WITH CHECK (
+  bucket_id = 'proofs' AND
+  (storage.foldername(name))[1] = auth.uid()::text
+);
+
+-- 3. Policy: Payagan ang authenticated users (Intern, Supervisor, Coordinator) na basahin/tingnan ang proofs
+CREATE POLICY "Authenticated users can read proofs"
+ON storage.objects FOR SELECT
+TO authenticated
+USING (bucket_id = 'proofs');
+
+-- 4. Policy: Payagan ang intern na i-delete ang sarili nilang file kung kinakailangan
+CREATE POLICY "Interns can delete own proofs"
+ON storage.objects FOR DELETE
+TO authenticated
+USING (
+  bucket_id = 'proofs' AND
+  (storage.foldername(name))[1] = auth.uid()::text
+);
+
+-- Auto-calculate rendered hours on attendance log checkout
+CREATE OR REPLACE FUNCTION calculate_rendered_hours()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.time_out IS NOT NULL AND NEW.time_in IS NOT NULL THEN
+    NEW.hours_rendered := ROUND(
+      EXTRACT(EPOCH FROM (NEW.time_out - NEW.time_in)) / 3600.0, 
+      2
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_calculate_rendered_hours ON attendance_logs;
+CREATE TRIGGER trg_calculate_rendered_hours
+BEFORE INSERT OR UPDATE ON attendance_logs
+FOR EACH ROW
+EXECUTE FUNCTION calculate_rendered_hours();
