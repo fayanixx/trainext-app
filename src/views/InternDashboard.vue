@@ -1,5 +1,5 @@
   <script setup lang="ts">
-  import { ref, onMounted, computed } from 'vue';
+  import { ref, onMounted, onUnmounted, computed } from 'vue';
   import { useRouter } from 'vue-router';
   import { supabase } from '@/lib/supabase';
   import { useAuthStore } from '@/stores/auth';
@@ -11,12 +11,14 @@
   import GeofenceErrorModal from '@/components/GeofenceErrorModal.vue';
   import ProofViewerModal from '@/components/ProofViewerModal.vue';
   import ProfileSettingsModal from '@/components/ProfileSettingsModal.vue';
+  import { useGeolocation } from '@/composables/useGeolocation';
 
+  let realtimeChannel: any = null;
   const router = useRouter();
   const authStore = useAuthStore();
   const attendanceStore = useAttendanceStore();
   const accomplishmentsStore = useAccomplishmentsStore();
-
+  const { coordinates, refreshLocation } = useGeolocation();
   // UI Modals
   const isProfileSettingsOpen = ref(false);
   const isAccomplishmentModalOpen = ref(false);
@@ -48,7 +50,9 @@
   });
 
   // Target Hours Progress Calculation
-  const requiredHours = 486;
+  const requiredHours = computed(() => {
+    return Number((authStore.user as any)?.required_hours) || 486;
+  });
   const renderedHours = computed(() => {
     return (attendanceStore.attendanceHistory || []).reduce(
       (acc, log) => acc + (Number(log.hours_rendered) || 0),
@@ -57,7 +61,7 @@
   });
 
   const progressPercentage = computed(() => {
-    const pct = (renderedHours.value / requiredHours) * 100;
+    const pct = (renderedHours.value / requiredHours.value) * 100;
     return Math.min(Math.round(pct), 100);
   });
 
@@ -147,43 +151,114 @@
     }
   };
 
-  // Clock In / Clock Out Geofenced Action
-  const handleAttendanceAction = async () => {
-    if (!authStore.user?.id || !supervisorSite.value) return;
+      // Reset affiliation para makapag-apply sa ibang supervisor
+    const resetAffiliationRequest = async () => {
+      if (!authStore.user?.id) return;
+      linkingLoading.value = true;
+      linkFeedback.value = null;
 
-    try {
-      if (currentStatus.value === 'on_duty') {
-        if (typeof (attendanceStore as any).timeOut === 'function') {
-          await (attendanceStore as any).timeOut();
-        } else if (typeof (attendanceStore as any).clockOut === 'function') {
-          await (attendanceStore as any).clockOut();
-        }
-      } else {
-        const payload = {
-          internId: authStore.user.id,
-          supervisorId: supervisorSite.value.supervisor_id,
-          officeLat: supervisorSite.value.latitude,
-          officeLng: supervisorSite.value.longitude,
-          allowedRadiusMeters: supervisorSite.value.radius_meters,
-        };
+      try {
+        const { error } = await supabase
+          .from('intern_supervisor_links')
+          .delete()
+          .eq('intern_id', authStore.user.id);
 
-        if (typeof (attendanceStore as any).timeIn === 'function') {
-          await (attendanceStore as any).timeIn(payload);
-        } else if (typeof (attendanceStore as any).clockIn === 'function') {
-          await (attendanceStore as any).clockIn(payload);
-        }
-      }
-    } catch (err: any) {
-      if (err.name === 'GeofenceError' || err.details) {
-        geofenceError.value = {
-          isOpen: true,
-          companyName: supervisorSite.value?.company_name || 'Designated Office',
-          formattedDistance: `${Math.round(err.details?.distance || 0)}m`,
-          allowedRadius: supervisorSite.value?.radius_meters || 100,
+        if (error) throw error;
+        internLinkStatus.value = 'none';
+        selectedSupervisorId.value = null;
+        await fetchAffiliation();
+      } catch (err: any) {
+        linkFeedback.value = {
+          type: 'error',
+          message: err.message || 'Failed to reset request.',
         };
+      } finally {
+        linkingLoading.value = false;
       }
-    }
+    };
+// Haversine formula para sa eksaktong distansya sa metro
+  const computeDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371e3; // Earth radius sa metro
+    const φ1 = (lat1 * Math.PI) / 180;
+    const φ2 = (lat2 * Math.PI) / 180;
+    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a =
+      Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
   };
+
+    const handleAttendanceAction = async () => {
+      if (!authStore.user?.id) return;
+
+      try {
+        // 1. Kuhanin ang active company site geofence perimeter
+        const site = supervisorSite.value;
+        if (!site?.latitude || !site?.longitude || !site?.radius_meters) {
+          alert('No authorized workplace geofence configured yet. Please contact your supervisor.');
+          return;
+        }
+
+        // 2. I-refresh at kuhanin ang kasalukuyang GPS coordinates ng intern
+        await refreshLocation();
+        const internLat = coordinates.value?.latitude;
+        const internLng = coordinates.value?.longitude;
+
+        if (!internLat || !internLng) {
+          alert('Unable to detect current GPS location. Please check device location permissions.');
+          return;
+        }
+
+        // 3. Kalkulahin ang distansya gamit ang Haversine formula
+        const distanceMeters = computeDistanceMeters(
+          internLat,
+          internLng,
+          site.latitude,
+          site.longitude
+        );
+
+        // 4. Geofence boundary check (may bisa sa parehong CLOCK IN at CLOCK OUT)
+        if (distanceMeters > site.radius_meters) {
+          geofenceError.value = {
+            isOpen: true,
+            companyName: site.company_name || 'Designated Office',
+            formattedDistance: `${Math.round(distanceMeters)}m away`,
+            allowedRadius: site.radius_meters,
+          };
+          return;
+        }
+
+        // 5. Attendance Actions batay sa status ng shift
+        if (currentStatus.value === 'on_duty') {
+          // CLOCK OUT (Within perimeter verified)
+          if (typeof (attendanceStore as any).timeOut === 'function') {
+            await (attendanceStore as any).timeOut({
+              internId: authStore.user.id,
+              latitude: internLat,
+              longitude: internLng,
+            });
+          }
+        } else {
+          // CLOCK IN (Within perimeter verified)
+          if (typeof (attendanceStore as any).timeIn === 'function') {
+            await (attendanceStore as any).timeIn({
+              internId: authStore.user.id,
+              supervisorId: site.supervisor_id,
+              latitude: internLat,
+              longitude: internLng,
+            });
+          }
+        }
+
+        await refreshData();
+      } catch (err: any) {
+        alert(`GPS or Attendance error: ${err.message || 'Failed to verify location.'}`);
+      }
+    };
 
   // Inspect Attached Proof
   const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: string) => {
@@ -217,6 +292,64 @@
     }
     await refreshData();
   });
+
+  onMounted(async () => {
+  await authStore.fetchProfile();
+  if (!authStore.isAuthenticated || !authStore.isIntern || !authStore.user) {
+    router.push('/auth');
+    return;
+  }
+  await refreshData();
+
+  // Subaybayan ang live updates sa attendance_logs at accomplishment_reports
+  if (authStore.user?.id) {
+    realtimeChannel = supabase
+      .channel(`intern-live-${authStore.user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'attendance_logs',
+          filter: `intern_id=eq.${authStore.user.id}`,
+        },
+        () => {
+          refreshData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'accomplishment_reports',
+          filter: `intern_id=eq.${authStore.user.id}`,
+        },
+        () => {
+          refreshData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'intern_supervisor_links',
+          filter: `intern_id=eq.${authStore.user.id}`,
+        },
+        () => {
+          fetchAffiliation();
+        }
+      )
+      .subscribe();
+  }
+});
+
+onUnmounted(() => {
+  if (realtimeChannel) {
+    supabase.removeChannel(realtimeChannel);
+  }
+});
   </script>
 
   <template>
@@ -276,7 +409,29 @@
           <div v-if="linkFeedback" class="p-2.5 rounded-xl text-xs" :class="linkFeedback.type === 'success' ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-300' : 'bg-red-950/60 border border-red-500/40 text-red-300'">
             {{ linkFeedback.message }}
           </div>
-
+        <!-- REJECTED STATE -->
+              <div v-if="internLinkStatus === 'rejected'" class="flex flex-col gap-2 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30">
+                <div class="flex items-center gap-2 text-rose-300 font-semibold text-xs">
+                  <svg class="w-4 h-4 shrink-0 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <circle cx="12" cy="12" r="10" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 9l-6 6M9 9l6 6" />
+                  </svg>
+                  <span>Affiliation Request Declined</span>
+                </div>
+                <p class="text-[11px] text-slate-300 leading-relaxed">
+                  Your previous request to link with the selected company supervisor was declined. You can select another supervisor from the directory to proceed.
+                </p>
+                <div class="pt-1">
+                  <button
+                    type="button"
+                    @click="resetAffiliationRequest"
+                    :disabled="linkingLoading"
+                    class="px-3.5 py-1.5 rounded-full border border-rose-500/50 text-xs text-rose-200 hover:bg-rose-500/20 transition cursor-pointer"
+                  >
+                    {{ linkingLoading ? 'Resetting...' : 'Choose Another Supervisor' }}
+                  </button>
+                </div>
+              </div>
           <div v-if="internLinkStatus === 'pending'" class="flex items-center gap-2.5 p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30">
             <span class="w-2 h-2 rounded-full bg-[#00d9ff] animate-ping"></span>
             <p class="text-xs text-slate-200">Your request is currently awaiting supervisor verification and geofence activation.</p>
@@ -313,7 +468,7 @@
             <span class="trainext-label">CUMULATIVE PROGRESS</span>
             <div class="flex items-baseline gap-2">
               <span class="text-3xl font-bold tracking-tight text-white">{{ renderedHours.toFixed(1) }}</span>
-              <span class="text-xs font-semibold text-[#858994]">/ {{ requiredHours }} hrs</span>
+              <span class="text-xs font-semibold text-[#858994]">/ {{ requiredHours }} hrs</span>            
             </div>
             <div class="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
               <div class="h-full rounded-full bg-gradient-to-r from-[#00d9ff] to-[#53d8f8] shadow-[0_0_8px_#00d9ff]" :style="{ width: `${progressPercentage}%` }"></div>

@@ -1,7 +1,7 @@
   <script setup lang="ts">
-  import { ref, onMounted, computed } from 'vue';
-  import { useRouter } from 'vue-router';
+  import { ref, computed, onMounted, onUnmounted } from 'vue';
   import { supabase } from '@/lib/supabase';
+  import { useRouter } from 'vue-router';
   import { useAuthStore } from '@/stores/auth';
   import { useAccomplishmentsStore } from '@/stores/accomplishments';
   import { sendStatusEmail } from '@/lib/email';
@@ -10,6 +10,7 @@
   import ProofViewerModal from '@/components/ProofViewerModal.vue';
   import ProfileSettingsModal from '@/components/ProfileSettingsModal.vue';
 
+  let supervisorRealtimeChannel: any = null;
   const router = useRouter();
   const authStore = useAuthStore();
   const accomplishmentsStore = useAccomplishmentsStore();
@@ -218,6 +219,43 @@
       return;
     }
     await loadAllData();
+
+    if (authStore.user?.id) {
+    supervisorRealtimeChannel = supabase
+      .channel(`supervisor-live-${authStore.user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'accomplishment_reports',
+        },
+        async () => {
+          if (authStore.user?.id) {
+            await accomplishmentsStore.fetchSupervisorLogs(authStore.user.id);
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'intern_supervisor_links',
+          filter: `supervisor_id=eq.${authStore.user.id}`,
+        },
+        async () => {
+          await fetchInterns();
+        }
+      )
+      .subscribe();
+  }
+});
+
+onUnmounted(() => {
+  if (supervisorRealtimeChannel) {
+    supabase.removeChannel(supervisorRealtimeChannel);
+  }
   });
   </script>
 
@@ -499,31 +537,30 @@
               </div>
 
               <!-- Single Item Review Actions -->
-              <div v-if="log.status === 'pending'" class="flex flex-col gap-2 pt-2 border-t border-white/10">
-                <input 
-                  v-model="reviewFeedback[log.id]"
-                  type="text" 
-                  placeholder="Optional correction remarks or feedback..."
-                  class="w-full h-8 px-3 rounded-lg bg-black/40 border border-white/15 text-xs text-white placeholder:text-[#858994] outline-none focus:border-[#00d9ff]"
-                />
-                <div class="flex justify-end gap-2">
-                  <button 
-                    type="button"
-                    @click="handleReview(log.id, 'rejected')"
-                    class="px-3.5 py-1.5 rounded-full border border-red-500/40 text-red-300 text-xs font-semibold hover:bg-red-500/20 transition cursor-pointer"
-                  >
-                    Reject
-                  </button>
-                  <button 
-                    type="button"
-                    @click="handleReview(log.id, 'approved')"
-                    class="trainext-btn-pill-primary h-7 px-3.5 text-xs"
-                  >
-                    Approve
-                  </button>
+                <div v-if="log.status === 'pending'" class="flex flex-col gap-2 pt-2 border-t border-white/10">
+                  <input 
+                    v-model="reviewFeedback[log.id]"
+                    type="text" 
+                    placeholder="Optional correction remarks or feedback..."
+                    class="w-full h-8 px-3 rounded-lg bg-black/40 border border-white/15 text-xs text-white placeholder:text-[#858994] outline-none focus:border-[#00d9ff]"
+                  />
+                  <div class="flex flex-col sm:flex-row sm:justify-end gap-2">
+                    <button 
+                      type="button"
+                      @click="handleReview(log.id, 'rejected')"
+                      class="w-full sm:w-auto px-4 py-1.5 rounded-full border border-red-500/40 text-red-300 text-xs font-semibold hover:bg-red-500/20 transition cursor-pointer text-center"
+                    >
+                      Reject
+                    </button>
+                    <button 
+                      type="button"
+                      @click="handleReview(log.id, 'approved')"
+                      class="w-full sm:w-auto trainext-btn-pill-primary h-8 sm:h-7 px-5 text-xs"
+                    >
+                      Approve
+                    </button>
+                  </div>
                 </div>
-              </div>
-
               <!-- Existing Feedback Display -->
               <div v-else-if="(log as any).feedback" class="p-2.5 rounded-xl bg-white/[0.02] border border-white/10 text-xs text-slate-300">
                 <span class="text-[8px] font-bold uppercase tracking-wider text-[#858994] block mb-0.5">FEEDBACK PROVIDED:</span>

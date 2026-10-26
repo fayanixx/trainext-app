@@ -235,38 +235,37 @@
 
         <!-- MASTER LIST & FILTER TOOLBAR -->
         <section class="trainext-glass-card flex flex-col gap-4">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 class="trainext-title">Live Intern Verification Directory</h2>
-              <p class="trainext-subtitle text-[11px]">Real-time audit across all partner training agencies and designated worksites.</p>
-            </div>
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h2 class="trainext-title">Live Intern Verification Directory</h2>
+                      <p class="trainext-subtitle text-[11px]">Real-time audit across all partner training agencies and designated worksites.</p>
+                    </div>
 
-            <!-- Export Actions -->
-            <div class="flex items-center gap-2">
-              <button 
-                type="button" 
-                @click="handleCSVExport"
-                class="px-3.5 py-1.5 rounded-full border border-white/20 text-xs text-slate-300 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
-              >
-                <svg class="w-3.5 h-3.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <span>Export CSV</span>
-              </button>
+                    <!-- Export Actions -->
+                    <div class="flex items-center gap-2 w-full sm:w-auto">
+                      <button 
+                        type="button" 
+                        @click="handleCSVExport"
+                        class="flex-1 sm:flex-none justify-center px-3.5 py-1.5 rounded-full border border-white/20 text-xs text-slate-300 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <svg class="w-3.5 h-3.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <span>Export CSV</span>
+                      </button>
 
-              <button 
-                type="button" 
-                @click="handlePDFExport"
-                class="trainext-btn-pill-primary h-[34px] px-3.5 text-[10.5px] flex items-center gap-1.5"
-              >
-                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                </svg>
-                <span>Generate PDF</span>
-              </button>
-            </div>
-          </div>
-
+                      <button 
+                        type="button" 
+                        @click="handlePDFExport"
+                        class="flex-1 sm:flex-none justify-center trainext-btn-pill-primary h-[34px] px-3.5 text-[10.5px] flex items-center gap-1.5"
+                      >
+                        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                        </svg>
+                        <span>Generate PDF</span>
+                      </button>
+                    </div>
+                  </div>
           <!-- Search and Filter Bar -->
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
             <div class="sm:col-span-2 relative">
@@ -299,17 +298,17 @@
             No intern records match the selected criteria.
           </div>
 
-          <div v-else class="flex flex-col gap-2.5">
+            <div v-else class="flex flex-col gap-2.5">
             <div 
               v-for="intern in filteredInterns" 
               :key="intern.id"
-              class="p-4 rounded-2xl bg-white/[0.02] border border-white/10 flex flex-wrap items-center justify-between gap-3"
+              class="p-4 rounded-2xl bg-white/[0.02] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
             >
-              <div>
-                <div class="flex items-center gap-2">
-                  <h3 class="text-sm font-bold text-white">{{ intern.full_name }}</h3>
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <h3 class="text-sm font-bold text-white truncate">{{ intern.full_name }}</h3>
                   <span 
-                    class="trainext-chip"
+                    class="trainext-chip shrink-0"
                     :class="{
                       'chip-cyan': intern.today_status === 'on_duty',
                       'chip-amber': intern.today_status === 'in_transit',
@@ -321,8 +320,8 @@
                   </span>
                 </div>
 
-                <div class="flex flex-wrap items-center gap-2 text-[11px] text-[#858994] mt-1">
-                  <span>{{ intern.company_name }}</span>
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#858994] mt-1.5">
+                  <span class="text-slate-300 font-medium">{{ intern.company_name }}</span>
                   <span>•</span>
                   <span>Sup: {{ intern.supervisor_name }}</span>
                   <span>•</span>
@@ -330,8 +329,8 @@
                 </div>
               </div>
 
-              <div class="flex items-center gap-3">
-                <div class="text-right">
+              <div class="flex items-center justify-between sm:justify-end gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-white/10 shrink-0">
+                <div class="text-left sm:text-right">
                   <span class="text-[8px] font-bold uppercase tracking-wider text-[#858994] block">RENDERED</span>
                   <span class="text-xs font-bold text-[#00d9ff] font-mono">{{ intern.total_hours.toFixed(1) }} hrs</span>
                 </div>

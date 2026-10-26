@@ -1,189 +1,190 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
 import { supabase } from '@/lib/supabase';
-import type { UserProfile, UserRole } from '@/types';
+import type { UserRole, UserProfile } from '@/types';
 
-export const useAuthStore = defineStore('auth', () => {
-  const user = ref<UserProfile | null>(null);
-  const loading = ref(false);
-  const errorMessage = ref<string | null>(null);
+export interface UserProfileData {
+  id: string;
+  full_name: string;
+  role: UserRole;
+  contact_number?: string;
+  home_address?: string;
+  emergency_contact_name?: string;
+  emergency_contact_number?: string;
+  avatar_url?: string;
+  created_at?: string;
+  updated_at?: string;
+}
 
-  const isAuthenticated = computed(() => !!user.value);
-  const isIntern = computed(() => user.value?.role === 'intern');
-  const isSupervisor = computed(() => user.value?.role === 'supervisor');
-  const isCoordinator = computed(() => user.value?.role === 'coordinator');
+interface AuthState {
+  user: UserProfile | UserProfileData | null;
+  loading: boolean;
+  error: string | null;
+  isInitialized: boolean;
+}
 
-  // Detects production URL (Vercel) or local development for Auth redirects
-  const getRedirectUrl = (path: string = '') => {
-    const origin = window.location.origin;
-    return `${origin}${path}`;
-  };
+export const useAuthStore = defineStore('auth', {
+  state: (): AuthState => ({
+    user: null,
+    loading: false,
+    error: null,
+    isInitialized: false,
+  }),
 
-  /**
-   * 1. Sign Up with User Role, Full Name, Contact Number
-   * Sends confirmation email link to Gmail.
-   */
-  const signUp = async (params: {
-    email: string;
-    password: string;
-    fullName: string;
-    contactNumber: string;
-    role: UserRole;
-  }) => {
-    loading.value = true;
-    errorMessage.value = null;
+  getters: {
+    isAuthenticated: (state) => !!state.user,
+    role: (state) => state.user?.role || null,
+    isIntern: (state) => state.user?.role === 'intern',
+    isSupervisor: (state) => state.user?.role === 'supervisor',
+    isCoordinator: (state) => state.user?.role === 'coordinator',
+  },
 
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email: params.email,
-        password: params.password,
-        options: {
-          data: {
-            full_name: params.fullName,
-            contact_number: params.contactNumber,
-            role: params.role,
-          },
-          emailRedirectTo: getRedirectUrl('/auth'),
-        },
-      });
-
-      if (error) throw error;
-      return data;
-    } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to sign up. Please try again.';
-      throw err;
-    } finally {
-      loading.value = false;
-    }
-  };
-
-  /**
-   * 2. Direct Sign In with Email and Password
-   */
-  const signIn = async (email: string, pass: string) => {
-    loading.value = true;
-    errorMessage.value = null;
-
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password: pass,
-      });
-
-      if (error) throw error;
-      await fetchProfile();
-      return data;
-    } catch (err: any) {
-      errorMessage.value = err.message || 'Invalid email or password.';
-      throw err;
-    } finally {
-      loading.value = false;
-    }
-  };
-
-  /**
-   * 3. Fetch Master Profile Record
-   */
-  const fetchProfile = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.user) {
-        user.value = null;
-        return null;
+  actions: {
+    async initialize() {
+      try {
+        this.loading = true;
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          await this.fetchProfile();
+        }
+      } catch (err: any) {
+        this.error = err.message || 'Failed to initialize authentication.';
+      } finally {
+        this.loading = false;
+        this.isInitialized = true;
       }
+    },
 
-      const { data, error } = await supabase
+    async fetchProfile() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          this.user = null;
+          return;
+        }
+
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (error) throw error;
+        this.user = data as any;
+      } catch (err: any) {
+        this.error = err.message || 'Failed to fetch user profile.';
+      }
+    },
+
+    async signIn(email: string, pass: string) {
+      this.loading = true;
+      this.error = null;
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password: pass,
+        });
+
+        if (error) throw error;
+
+        if (data.user) {
+          await this.fetchProfile();
+        }
+      } catch (err: any) {
+        this.error = err.message || 'Failed to sign in.';
+        throw err;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async signUp(email: string, pass: string, fullName: string, role: UserRole) {
+      this.loading = true;
+      this.error = null;
+      try {
+        const { data, error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password: pass,
+          options: {
+            data: {
+              full_name: fullName.trim(),
+              role: role,
+            },
+          },
+        });
+
+        if (error) throw error;
+
+        if (data.user) {
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .upsert({
+              id: data.user.id,
+              full_name: fullName.trim(),
+              role: role,
+            });
+
+          if (profileError) throw profileError;
+          await this.fetchProfile();
+        }
+      } catch (err: any) {
+        this.error = err.message || 'Failed to register account.';
+        throw err;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async signInWithGoogle() {
+      this.loading = true;
+      this.error = null;
+      try {
+        const { error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: `${window.location.origin}/auth`,
+            queryParams: {
+              access_type: 'offline',
+              prompt: 'consent',
+            },
+          },
+        });
+        if (error) throw error;
+      } catch (err: any) {
+        this.error = err.message || 'Failed to authenticate with Google.';
+        throw err;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async assignGoogleRole(role: UserRole) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('No authenticated user session found.');
+
+      const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
+
+      const { error } = await supabase
         .from('profiles')
-        .select('*')
-        .eq('id', session.user.id)
-        .single();
+        .upsert({
+          id: user.id,
+          full_name: fullName,
+          role: role,
+        });
 
       if (error) throw error;
-      user.value = data as UserProfile;
-      return user.value;
-    } catch (err: any) {
-      console.error('Error fetching profile:', err.message);
-      return null;
-    }
-  };
+      await this.fetchProfile();
+    },
 
-  /**
-   * 4. Forgot Password - Dispatches Password Reset Email
-   */
-  const sendPasswordReset = async (emailAddress: string) => {
-    loading.value = true;
-    errorMessage.value = null;
-
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(emailAddress, {
-        redirectTo: getRedirectUrl('/reset-password'),
-      });
-
-      if (error) throw error;
-      return true;
-    } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to send password reset email.';
-      throw err;
-    } finally {
-      loading.value = false;
-    }
-  };
-
-  /**
-   * 5. Update Profile Record (Used in Profile Settings Modal)
-   */
-  const updateProfile = async (updates: Partial<UserProfile>) => {
-    if (!user.value) return;
-    loading.value = true;
-
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .update({
-          ...updates,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', user.value.id)
-        .select()
-        .single();
-
-      if (error) throw error;
-      user.value = data as UserProfile;
-      return user.value;
-    } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to update profile information.';
-      throw err;
-    } finally {
-      loading.value = false;
-    }
-  };
-
-  /**
-   * 6. Sign Out
-   */
-  const signOut = async () => {
-    loading.value = true;
-    try {
-      await supabase.auth.signOut();
-      user.value = null;
-    } finally {
-      loading.value = false;
-    }
-  };
-
-  return {
-    user,
-    loading,
-    errorMessage,
-    isAuthenticated,
-    isIntern,
-    isSupervisor,
-    isCoordinator,
-    signUp,
-    signIn,
-    fetchProfile,
-    sendPasswordReset,
-    updateProfile,
-    signOut,
-  };
+    async signOut() {
+      this.loading = true;
+      try {
+        await supabase.auth.signOut();
+        this.user = null;
+      } catch (err: any) {
+        this.error = err.message || 'Failed to sign out.';
+      } finally {
+        this.loading = false;
+      }
+    },
+  },
 });
