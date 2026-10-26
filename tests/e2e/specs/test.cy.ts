@@ -1,6 +1,8 @@
-describe('My First Test', () => {
-  it('Visits the app root url', () => {
+describe('TraiNext authentication', () => {
+  it('shows the sign-in screen', () => {
     cy.visit('/')
-    cy.contains('#container', 'Ready to create an app?')
+    cy.contains('TraiNext')
+    cy.contains('Geofenced OJT attendance, safety and accomplishment tracking')
+    cy.contains('Sign in')
   })
 })

@@ -19,6 +19,9 @@ npm-debug.log*
 
 /.idea
 /.ionic
+.env
+.env.local
+.env.*.local
 /.sass-cache
 /.sourcemaps
 /.versions
