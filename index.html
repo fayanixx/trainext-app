@@ -11,38 +11,17 @@
       name="viewport"
       content="viewport-fit=cover, width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no"
     />
-    <meta name="theme-color" content="#020611" />
     <meta name="format-detection" content="telephone=no" />
     <meta name="msapplication-tap-highlight" content="no" />
 
-    <!-- Favicon / App Icon -->
-    <link rel="icon" type="image/jpeg" href="/assets/trainext-logo.jpg" />
-    <link rel="apple-touch-icon" href="/assets/trainext-logo.jpg" />
+    <link rel="icon" type="image/png" href="/assets/trainext-logo.png" />
 
-    <!-- CDNFonts Aileron All Styles -->
-    <link rel="preconnect" href="https://fonts.cdnfonts.com" crossorigin />
-    <link rel="stylesheet" href="https://fonts.cdnfonts.com/css/aileron" />
-
-    <!-- iOS Home Screen -->
-    <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="TraiNext" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-
-    <style>
-      html,
-      body {
-        background-color: #020611;
-        margin: 0;
-        padding: 0;
-        height: 100%;
-        width: 100%;
-        overflow: hidden;
-      }
-    </style>
+    <!-- Aileron Font Imports (Web Fonts CDN) -->
+    <link rel="preconnect" href="https://fonts.cdnfonts.com" />
+    <link href="https://fonts.cdnfonts.com/css/aileron" rel="stylesheet" />
   </head>
 
-  <body class="bg-[#020611]">
+  <body class="bg-black font-sans text-slate-100 antialiased selection:bg-cyan-500 selection:text-black">
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -1,5 +1,5 @@
 import emailjs from '@emailjs/browser'
-import type { ApprovalStatus } from '@/types'
+export type ApprovalStatus = 'approved' | 'rejected' | 'pending';
 
 const serviceId = import.meta.env.VITE_EMAILJS_SERVICE_ID as string | undefined
 const templateId = import.meta.env.VITE_EMAILJS_TEMPLATE_ID as string | undefined

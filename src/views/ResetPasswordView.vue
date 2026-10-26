@@ -1,165 +1,142 @@
-<script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
-import { supabase } from '@/lib/supabase';
+  <script setup lang="ts">
+  import { ref } from 'vue';
+  import { useRouter } from 'vue-router';
+  import { supabase } from '@/lib/supabase';
 
-const router = useRouter();
+  const router = useRouter();
 
-// Form States
-const newPassword = ref('');
-const confirmPassword = ref('');
-const loading = ref(false);
-const errorMsg = ref('');
-const successMsg = ref('');
-const isValidSession = ref(false);
+  const email = ref('');
+  const loading = ref(false);
+  const errorMessage = ref('');
+  const successMessage = ref('');
 
-// Validate whether a valid recovery token exists in the URL/Session
-onMounted(async () => {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session) {
-    isValidSession.value = true;
-  } else {
-    // Listen for auth state change triggered by the reset link token
-    supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'PASSWORD_RECOVERY' || session) {
-        isValidSession.value = true;
-      }
-    });
-  }
-});
+  const handleReset = async () => {
+    errorMessage.value = '';
+    successMessage.value = '';
 
-const handleResetPassword = async () => {
-  errorMsg.value = '';
-  successMsg.value = '';
+    if (!email.value.trim()) {
+      errorMessage.value = 'Please provide your registered email address.';
+      return;
+    }
 
-  if (newPassword.value.length < 6) {
-    errorMsg.value = 'Password must be at least 6 characters long.';
-    return;
-  }
+    loading.value = true;
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.value.trim(), {
+        redirectTo: `${window.location.origin}/auth?reset=true`,
+      });
 
-  if (newPassword.value !== confirmPassword.value) {
-    errorMsg.value = 'Passwords do not match. Please verify and try again.';
-    return;
-  }
+      if (error) throw error;
 
-  loading.value = true;
-  try {
-    const { error } = await supabase.auth.updateUser({
-      password: newPassword.value,
-    });
+      successMessage.value = 'Password reset instructions have been sent to your email inbox.';
+      email.value = '';
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to send reset email. Please try again.';
+    } finally {
+      loading.value = false;
+    }
+  };
+  </script>
 
-    if (error) throw error;
-
-    successMsg.value = 'Your password has been reset successfully! Redirecting to Sign In...';
-    setTimeout(() => {
-      router.push('/auth');
-    }, 2500);
-  } catch (err: any) {
-    errorMsg.value = err.message || 'Failed to update password. Please try requesting a new link.';
-  } finally {
-    loading.value = false;
-  }
-};
-</script>
-
-<template>
-  <div class="min-h-screen flex items-center justify-center p-4 bg-[#0a0f1d] relative overflow-hidden select-none">
-    <!-- Ambient Neon Cyberpunk Glow Backdrops -->
-    <div class="absolute -top-32 -left-32 w-96 h-96 bg-cyan-500/15 rounded-full blur-[120px] pointer-events-none"></div>
-    <div class="absolute -bottom-32 -right-32 w-96 h-96 bg-fuchsia-500/15 rounded-full blur-[120px] pointer-events-none"></div>
-
-    <!-- Main Glass Card Container -->
-    <div class="w-full max-w-md p-6 sm:p-8 rounded-[2rem] bg-[#0d1527]/85 border border-cyan-500/30 backdrop-blur-2xl shadow-[0_0_50px_rgba(6,182,212,0.18)] text-slate-100 relative z-10">
+  <template>
+    <main class="relative min-h-screen w-full flex flex-col items-center justify-between p-4 sm:p-6 bg-[#050609] overflow-y-auto select-none">
       
-      <!-- App Header Branding -->
-      <div class="text-center mb-6">
-        <h1 class="text-3xl font-black tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-500 to-fuchsia-500">
-          TRAINEXT
-        </h1>
-        <p class="text-[11px] font-semibold text-slate-400 mt-1 uppercase tracking-widest">
-          Set New Account Password
-        </p>
-      </div>
+      <!-- Railway Background Image -->
+      <div 
+        class="fixed inset-0 bg-cover bg-center bg-no-repeat pointer-events-none"
+        style="background-image: url('/assets/bg-placeholder.png');"
+      ></div>
 
-      <!-- Expired or Invalid Link Warning -->
-      <div v-if="!isValidSession" class="text-center py-6 space-y-4">
-        <div class="w-14 h-14 mx-auto rounded-full bg-amber-500/20 border border-amber-400/60 flex items-center justify-center text-amber-300 text-2xl shadow-[0_0_20px_rgba(251,191,36,0.25)]">
-          ⚠
-        </div>
-        <h3 class="text-base font-bold text-white tracking-wide">Invalid or Expired Link</h3>
-        <p class="text-xs text-slate-300 leading-relaxed px-2">
-          The password reset token is missing or has expired. Please request a new link from the Sign In page.
-        </p>
-        <div class="pt-2">
-          <button 
-            @click="router.push('/auth')"
-            class="w-full py-2.5 rounded-xl bg-slate-800 text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-700 transition border border-slate-700/60"
-          >
-            Back to Sign In
-          </button>
-        </div>
-      </div>
+      <!-- Dark Navy/Black Overlay -->
+      <div class="fixed inset-0 bg-[#050609]/65 pointer-events-none"></div>
 
-      <!-- Password Update Form -->
-      <form v-else @submit.prevent="handleResetPassword" class="space-y-4">
-        <!-- Success Alert -->
-        <div v-if="successMsg" class="p-3.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-300 font-medium">
-          {{ successMsg }}
-        </div>
-
-        <!-- Error Alert -->
-        <div v-if="errorMsg" class="p-3.5 rounded-xl bg-red-950/60 border border-red-500/40 text-xs text-red-300 font-medium">
-          {{ errorMsg }}
-        </div>
-
-        <p class="text-xs text-slate-400 leading-relaxed">
-          Please enter your new password below. Make sure it is at least 6 characters long.
-        </p>
-
-        <!-- New Password Field -->
-        <div class="space-y-1">
-          <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">New Password</label>
-          <input 
-            v-model="newPassword" 
-            type="password" 
-            required
-            placeholder="••••••••"
-            class="w-full px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-100 text-sm focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 outline-none transition"
+      <div class="w-full max-w-[440px] my-auto relative z-10 flex flex-col items-center">
+        
+        <!-- TRAINEXT BRANDING LOGO -->
+        <div class="w-full flex justify-center mb-8">
+          <img 
+            src="/assets/trainext-logo.png" 
+            alt="TraiNext Logo" 
+            class="w-[118px] h-auto object-contain"
           />
         </div>
 
-        <!-- Confirm New Password Field -->
-        <div class="space-y-1">
-          <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Confirm New Password</label>
-          <input 
-            v-model="confirmPassword" 
-            type="password" 
-            required
-            placeholder="••••••••"
-            class="w-full px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-100 text-sm focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 outline-none transition"
-          />
+        <!-- FROSTED GLASS CARD -->
+        <div class="w-full trainext-spec-glass p-6 sm:p-8 flex flex-col">
+          
+          <!-- HEADINGS -->
+          <div class="mb-6">
+            <h1 class="text-white text-[30px] font-bold tracking-[-0.8px] leading-tight">
+              Reset Password
+            </h1>
+            <p class="text-[#00D9FF] text-[13px] font-normal mt-1 leading-snug">
+              Enter your account email to receive recovery instructions.
+            </p>
+          </div>
+
+          <!-- FEEDBACK NOTIFICATIONS -->
+          <div v-if="errorMessage" class="mb-4 p-2.5 rounded-xl bg-red-950/80 border border-red-500/50 text-[11px] text-red-200">
+            {{ errorMessage }}
+          </div>
+          <div v-if="successMessage" class="mb-4 p-2.5 rounded-xl bg-emerald-950/80 border border-emerald-500/50 text-[11px] text-emerald-200">
+            {{ successMessage }}
+          </div>
+
+          <!-- FORM -->
+          <form @submit.prevent="handleReset" class="flex flex-col">
+            
+            <!-- EMAIL INPUT -->
+            <div class="mb-7">
+              <label class="block text-[8.5px] font-semibold text-[#cbd5e1] tracking-[1.2px] uppercase mb-1.5">
+                REGISTERED EMAIL
+              </label>
+              <div class="trainext-spec-input-line flex items-center gap-2.5 pb-2">
+                <svg class="w-[14px] h-[14px] text-[#00D9FF] shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <input 
+                  v-model="email" 
+                  type="email" 
+                  required
+                  placeholder="you@example.com"
+                  class="w-full bg-transparent text-white text-[12px] placeholder:text-[#858994] outline-none"
+                />
+              </div>
+            </div>
+
+            <!-- PRIMARY SUBMIT BUTTON -->
+            <div class="flex justify-center mb-6">
+              <button 
+                type="submit" 
+                :disabled="loading"
+                class="trainext-spec-btn-primary w-[190px]"
+              >
+                {{ loading ? 'SENDING...' : 'SEND RESET LINK' }}
+              </button>
+            </div>
+
+            <!-- BACK TO SIGN IN LINK -->
+            <div class="text-center">
+              <router-link 
+                to="/auth"
+                class="text-[9.5px] text-[#858994] hover:text-white tracking-[0.4px] transition flex items-center justify-center gap-1.5 font-semibold uppercase"
+              >
+                <svg class="w-3 h-3 text-[#00D9FF]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+                <span>Back to Sign In</span>
+              </router-link>
+            </div>
+
+          </form>
+
         </div>
 
-        <!-- Submit Button -->
-        <button 
-          type="submit" 
-          :disabled="loading"
-          class="w-full py-3 mt-2 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 hover:from-cyan-400 hover:to-fuchsia-500 text-white font-bold text-sm tracking-wider uppercase shadow-[0_0_25px_rgba(6,182,212,0.35)] disabled:opacity-50 transition"
-        >
-          {{ loading ? 'Updating Password...' : 'Save New Password' }}
-        </button>
-
-        <!-- Return to Sign In Link -->
-        <div class="text-center pt-2">
-          <button 
-            type="button" 
-            @click="router.push('/auth')" 
-            class="text-xs text-slate-400 hover:text-cyan-400 transition"
-          >
-            Cancel and Return to Sign In
-          </button>
+        <!-- FOOTER TAGLINE -->
+        <div class="text-center mt-7 text-[9.5px] tracking-[0.5px]">
+          <span class="text-white/80 font-normal">Smart Tracking. </span>
+          <span class="text-[#00D9FF] font-semibold">Real-Time Safety.</span>
         </div>
-      </form>
-    </div>
-  </div>
-</template>
+
+      </div>
+    </main>
+  </template>

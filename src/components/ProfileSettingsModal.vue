@@ -1,409 +1,275 @@
-<template>
-  <ion-modal :is-open="isOpen" @didDismiss="emit('update:isOpen', false)">
-    <ion-header class="glass-header">
-      <ion-toolbar class="glass-toolbar">
-        <ion-title class="font-heavy text-white">Profile Settings</ion-title>
-        <ion-buttons slot="end">
-          <button type="button" class="close-pill-btn" @click="close">Close</button>
-        </ion-buttons>
-      </ion-toolbar>
-    </ion-header>
+  <script setup lang="ts">
+  import { ref, watch, computed, onMounted } from 'vue';
+  import { supabase } from '@/lib/supabase';
+  import { useAuthStore } from '@/stores/auth';
 
-    <ion-content class="modal-content">
-      <div class="mx-auto max-w-2xl space-y-5 px-4 py-6 font-aileron">
-        <!-- Top Profile Badge Card -->
-        <div class="trainext-glass-card">
-          <div class="flex items-center gap-3">
-            <div class="w-12 h-12 rounded-full bg-gradient-to-tr from-[#00C2FF] to-[#38BDF8] flex items-center justify-center font-heavy text-black text-lg shadow-[0_0_15px_rgba(0,194,255,0.4)]">
-              {{ profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : 'U' }}
-            </div>
-            <div>
-              <p class="text-base font-heavy text-white">{{ profile?.full_name }}</p>
-              <p class="text-xs text-slate-300 font-semibold">{{ profile?.email }}</p>
-            </div>
-          </div>
+  const props = defineProps<{
+    isOpen: boolean;
+  }>();
 
-          <div class="mt-3 flex flex-wrap gap-2 pt-1 border-t border-white/10">
-            <span class="badge-pill badge-pill-cyan">{{ roleLabel }}</span>
-            <span v-if="profile?.role === 'intern'" class="badge-pill" :class="enrollmentColor">
-              Enrollment: {{ profile?.enrollment_status }}
-            </span>
-            <span v-if="profile?.role === 'intern'" class="badge-pill" :class="deploymentColor">
-              Deployment: {{ profile?.deployment_status }}
-            </span>
-          </div>
-        </div>
+  const emit = defineEmits<{
+    (e: 'close'): void;
+    (e: 'saved'): void;
+  }>();
 
-        <!-- Section 1: Personal Info -->
-        <div class="trainext-glass-card space-y-4">
-          <h4 class="section-title text-[#00C2FF]">Personal Information</h4>
+  const authStore = useAuthStore();
 
-          <div>
-            <label class="field-label">FULL NAME</label>
-            <div class="input-line-box">
-              <input v-model="form.full_name" type="text" class="field-input" placeholder="Your full name" />
-            </div>
-          </div>
+  // Form Fields
+  const fullName = ref('');
+  const contactNumber = ref('');
+  const userEmail = ref('');
+  const newPassword = ref('');
+  const confirmPassword = ref('');
 
-          <div>
-            <label class="field-label">CONTACT NUMBER</label>
-            <div class="input-line-box">
-              <input v-model="form.phone" type="tel" class="field-input" placeholder="+63 900 000 0000" />
-            </div>
-          </div>
+  // UI States
+  const isSubmitting = ref(false);
+  const showPassword = ref(false);
+  const errorMessage = ref('');
+  const successMessage = ref('');
 
-          <div v-if="profile?.role !== 'supervisor'" class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div>
-              <label class="field-label">STUDENT ID NUMBER</label>
-              <div class="input-line-box">
-                <input v-model="form.id_number" type="text" class="field-input" placeholder="e.g. 2023-0001" />
-              </div>
-            </div>
-            <div>
-              <label class="field-label">UNIVERSITY / SCHOOL</label>
-              <div class="input-line-box">
-                <input v-model="form.university_name" type="text" class="field-input" placeholder="University name" />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Section 2: Company Info -->
-        <div class="trainext-glass-card space-y-4">
-          <h4 class="section-title text-[#00C2FF]">Company & OJT Information</h4>
-
-          <div>
-            <label class="field-label">COMPANY NAME</label>
-            <div class="input-line-box">
-              <input v-model="form.company_name" type="text" class="field-input" placeholder="Company name" />
-            </div>
-          </div>
-
-          <div>
-            <label class="field-label">COMPANY ADDRESS</label>
-            <div class="input-line-box">
-              <input v-model="form.company_address" type="text" class="field-input" placeholder="Company address" />
-            </div>
-          </div>
-
-          <div>
-            <label class="field-label">BASE RESIDENCE (SAFE-AT-BASE AUDIT REFERENCE)</label>
-            <div class="input-line-box">
-              <input v-model="form.home_base_address" type="text" class="field-input" placeholder="Your permanent / boarding residence address" />
-            </div>
-          </div>
-        </div>
-
-        <!-- Section 3: Emergency Contact -->
-        <div class="trainext-glass-card space-y-4">
-          <h4 class="section-title text-[#00C2FF]">Emergency Contact</h4>
-
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-            <div>
-              <label class="field-label">CONTACT PERSON</label>
-              <div class="input-line-box">
-                <input v-model="form.emergency_contact_name" type="text" class="field-input" placeholder="Guardian name" />
-              </div>
-            </div>
-            <div>
-              <label class="field-label">RELATIONSHIP</label>
-              <div class="input-line-box">
-                <input v-model="form.emergency_contact_relationship" type="text" class="field-input" placeholder="Parent, guardian, sibling" />
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <label class="field-label">EMERGENCY CONTACT NUMBER</label>
-            <div class="input-line-box">
-              <input v-model="form.emergency_contact_phone" type="tel" class="field-input" placeholder="+63 900 000 0000" />
-            </div>
-          </div>
-        </div>
-
-        <p v-if="feedback" class="text-xs font-semibold" :class="feedbackColor === 'success' ? 'text-emerald-400' : 'text-rose-400'">
-          {{ feedback }}
-        </p>
-
-        <button
-          type="button"
-          class="pill-btn btn-gradient-cyan w-full flex items-center justify-center gap-2 mt-4"
-          :disabled="saving"
-          @click="save"
-        >
-          <ion-spinner v-if="saving" name="crescent" class="w-4 h-4 text-black" />
-          SAVE PROFILE
-        </button>
-      </div>
-    </ion-content>
-  </ion-modal>
-</template>
-
-<script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
-import {
-  IonButtons,
-  IonContent,
-  IonHeader,
-  IonModal,
-  IonSpinner,
-  IonTitle,
-  IonToolbar
-} from '@ionic/vue'
-import { useAuthStore } from '@/stores/auth'
-import type { ProfileUpdateInput } from '@/types'
-
-const props = defineProps<{ isOpen: boolean }>()
-const emit = defineEmits<{ 'update:isOpen': [value: boolean] }>()
-
-const auth = useAuthStore()
-const saving = ref(false)
-const feedback = ref('')
-const feedbackColor = ref<'success' | 'danger'>('success')
-
-const form = reactive<ProfileUpdateInput>({
-  full_name: '',
-  phone: '',
-  id_number: '',
-  university_name: '',
-  company_name: '',
-  company_address: '',
-  home_base_address: '',
-  emergency_contact_name: '',
-  emergency_contact_relationship: '',
-  emergency_contact_phone: ''
-})
-
-const profile = computed(() => auth.profile)
-const roleLabel = computed(() => {
-  if (profile.value?.role === 'coordinator') {
-    return 'School coordinator'
-  }
-  if (profile.value?.role === 'supervisor') {
-    return 'Company supervisor'
-  }
-  return 'Intern'
-})
-const enrollmentColor = computed(() =>
-  profile.value?.enrollment_status === 'approved'
-    ? 'badge-pill-success'
-    : profile.value?.enrollment_status === 'rejected'
-      ? 'badge-pill-danger'
-      : 'badge-pill-amber'
-)
-const deploymentColor = computed(() =>
-  profile.value?.deployment_status === 'approved'
-    ? 'badge-pill-success'
-    : profile.value?.deployment_status === 'rejected'
-      ? 'badge-pill-danger'
-      : 'badge-pill-amber'
-)
-
-function hydrate(): void {
-  const current = profile.value
-  form.full_name = current?.full_name ?? ''
-  form.phone = current?.phone ?? ''
-  form.id_number = current?.id_number ?? ''
-  form.university_name = current?.university_name ?? ''
-  form.company_name = current?.company_name ?? ''
-  form.company_address = current?.company_address ?? ''
-  form.home_base_address = current?.home_base_address ?? ''
-  form.emergency_contact_name = current?.emergency_contact_name ?? ''
-  form.emergency_contact_relationship =
-    current?.emergency_contact_relationship ?? ''
-  form.emergency_contact_phone = current?.emergency_contact_phone ?? ''
-  feedback.value = ''
-}
-
-function close(): void {
-  emit('update:isOpen', false)
-}
-
-function validate(): string {
-  if (!form.full_name.trim()) {
-    return 'Full name is required.'
-  }
-  if (form.phone.trim() && !/^[+()\-\s\d.]{7,20}$/.test(form.phone.trim())) {
-    return 'Enter a valid contact number.'
-  }
-  if (
-    form.emergency_contact_phone.trim() &&
-    !/^[+()\-\s\d.]{7,20}$/.test(form.emergency_contact_phone.trim())
-  ) {
-    return 'Enter a valid emergency contact number.'
-  }
-  return ''
-}
-
-async function save(): Promise<void> {
-  feedback.value = ''
-  const message = validate()
-  if (message) {
-    feedbackColor.value = 'danger'
-    feedback.value = message
-    return
-  }
-
-  saving.value = true
-  try {
-    await auth.updateProfile({
-      full_name: form.full_name.trim(),
-      phone: form.phone.trim(),
-      id_number: form.id_number.trim(),
-      university_name: form.university_name.trim(),
-      company_name: form.company_name.trim(),
-      company_address: form.company_address.trim(),
-      home_base_address: form.home_base_address.trim(),
-      emergency_contact_name: form.emergency_contact_name.trim(),
-      emergency_contact_relationship: form.emergency_contact_relationship.trim(),
-      emergency_contact_phone: form.emergency_contact_phone.trim()
-    })
-    feedbackColor.value = 'success'
-    feedback.value = 'Profile updated.'
-  } catch (err) {
-    feedbackColor.value = 'danger'
-    feedback.value =
-      err instanceof Error ? err.message : 'Unable to update your profile.'
-  } finally {
-    saving.value = false
-  }
-}
-
-watch(
-  () => props.isOpen,
-  (open) => {
-    if (open) {
-      hydrate()
+  const fetchUserEmail = async () => {
+    const { data } = await supabase.auth.getUser();
+    if (data?.user?.email) {
+      userEmail.value = data.user.email;
     }
-  }
-)
-</script>
+  };
 
-<style scoped>
-.font-aileron {
-  font-family: 'Aileron', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-}
+  // Sync current user profile data when opened
+  watch(
+    () => props.isOpen,
+    async (open) => {
+      if (open) {
+        if (authStore.user) {
+          fullName.value = authStore.user.full_name || '';
+          contactNumber.value = authStore.user.contact_number || '';
+        }
+        await fetchUserEmail();
+        newPassword.value = '';
+        confirmPassword.value = '';
+        errorMessage.value = '';
+        successMessage.value = '';
+      }
+    }
+  );
 
-.modal-content {
-  --background: #020611 !important;
-}
+  onMounted(async () => {
+    await fetchUserEmail();
+  });
 
-.glass-header {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
-}
+  const handleSave = async () => {
+    if (!authStore.user?.id) return;
 
-.glass-toolbar {
-  --background: #040916 !important;
-  --color: #ffffff !important;
-}
+    errorMessage.value = '';
+    successMessage.value = '';
 
-.trainext-glass-card {
-  border-radius: 24px !important;
-  border: 1px solid rgba(255, 255, 255, 0.18) !important;
-  background: rgba(8, 16, 36, 0.6) !important;
-  backdrop-filter: blur(8px) saturate(140%) !important;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.25) !important;
-  padding: 20px !important;
-}
+    if (!fullName.value.trim()) {
+      errorMessage.value = 'Full name is required.';
+      return;
+    }
 
-.section-title {
-  font-family: 'Aileron Heavy', sans-serif !important;
-  font-size: 13.5px !important;
-  font-weight: 900 !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.08em !important;
-}
+    if (newPassword.value) {
+      if (newPassword.value.length < 8) {
+        errorMessage.value = 'New password must be at least 8 characters.';
+        return;
+      }
+      if (newPassword.value !== confirmPassword.value) {
+        errorMessage.value = 'Passwords do not match.';
+        return;
+      }
+    }
 
-.field-label {
-  font-size: 9.5px !important;
-  font-family: 'Aileron Heavy', sans-serif !important;
-  font-weight: 900 !important;
-  letter-spacing: 0.14em !important;
-  color: #cbd5e1 !important;
-  text-transform: uppercase !important;
-  display: block !important;
-  margin-bottom: 4px !important;
-}
+    isSubmitting.value = true;
 
-.input-line-box {
-  display: flex !important;
-  align-items: center !important;
-  border-bottom: 1.25px solid rgba(255, 255, 255, 0.35) !important;
-  padding-bottom: 6px !important;
-  padding-top: 4px !important;
-  transition: border-color 0.2s ease !important;
-}
+    try {
+      // 1. Update Profile Metadata
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({
+          full_name: fullName.value.trim(),
+          contact_number: contactNumber.value.trim() || null,
+        })
+        .eq('id', authStore.user.id);
 
-.input-line-box:focus-within {
-  border-bottom-color: #00C2FF !important;
-}
+      if (profileError) throw profileError;
 
-.field-input {
-  width: 100% !important;
-  background: transparent !important;
-  color: #ffffff !important;
-  font-size: 13.5px !important;
-  outline: none !important;
-  border: none !important;
-}
+      // 2. Update Password if specified
+      if (newPassword.value) {
+        const { error: passwordError } = await supabase.auth.updateUser({
+          password: newPassword.value,
+        });
 
-.close-pill-btn {
-  padding: 6px 14px;
-  border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #ffffff;
-  font-size: 11.5px;
-  font-weight: 700;
-  cursor: pointer;
-}
+        if (passwordError) throw passwordError;
+      }
 
-.pill-btn {
-  border-radius: 9999px !important;
-  padding: 13.5px 22px !important;
-  font-family: 'Aileron Heavy', sans-serif !important;
-  font-weight: 900 !important;
-  font-size: 13.5px !important;
-  cursor: pointer !important;
-  border: none !important;
-}
+      await authStore.fetchProfile();
+      successMessage.value = 'Profile updated successfully!';
+      newPassword.value = '';
+      confirmPassword.value = '';
 
-.btn-gradient-cyan {
-  background: linear-gradient(135deg, #a5f3fc 0%, #67e8f9 45%, #38bdf8 100%) !important;
-  color: #000000 !important;
-  box-shadow: 0 0 20px rgba(0, 194, 255, 0.45) !important;
-}
+      setTimeout(() => {
+        emit('saved');
+        emit('close');
+      }, 1200);
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to update profile settings.';
+    } finally {
+      isSubmitting.value = false;
+    }
+  };
+  </script>
 
-.badge-pill {
-  display: inline-flex !important;
-  align-items: center !important;
-  padding: 4px 10px !important;
-  border-radius: 9999px !important;
-  font-size: 10.5px !important;
-  font-weight: 800 !important;
-}
+  <template>
+    <div 
+      v-if="isOpen" 
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm select-none overflow-y-auto"
+    >
+      <div class="w-full max-w-md my-auto trainext-glass-card rounded-[28px] p-6 flex flex-col gap-4 border border-white/20 shadow-2xl">
+        
+        <!-- HEADER -->
+        <div class="flex items-center justify-between pb-2 border-b border-white/10">
+          <div>
+            <h2 class="text-base font-bold text-white tracking-tight">Account Settings</h2>
+            <p class="text-[11px] text-[#00d9ff]">Manage your personal credentials and contact info.</p>
+          </div>
+          <button 
+            type="button" 
+            @click="emit('close')"
+            class="text-slate-400 hover:text-white transition cursor-pointer p-1"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
 
-.badge-pill-success {
-  background: rgba(16, 185, 129, 0.16) !important;
-  color: #34d399 !important;
-  border: 1px solid rgba(16, 185, 129, 0.35) !important;
-}
+        <!-- FEEDBACK ALERTS -->
+        <div v-if="errorMessage" class="p-2.5 rounded-xl bg-red-950/60 border border-red-500/40 text-xs text-red-200">
+          {{ errorMessage }}
+        </div>
+        <div v-if="successMessage" class="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-200">
+          {{ successMessage }}
+        </div>
 
-.badge-pill-danger {
-  background: rgba(239, 68, 68, 0.16) !important;
-  color: #f87171 !important;
-  border: 1px solid rgba(239, 68, 68, 0.35) !important;
-}
+        <!-- FORM FIELDS -->
+        <form @submit.prevent="handleSave" class="flex flex-col gap-3.5">
+          
+          <!-- FULL NAME -->
+          <div class="flex flex-col gap-1">
+            <label class="trainext-label">FULL NAME</label>
+            <div class="trainext-spec-input-line flex items-center gap-2 pb-2">
+              <svg class="w-3.5 h-3.5 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="7.5" r="4" />
+                <path d="M4 21v-2a8 8 0 0 1 16 0v2z" />
+              </svg>
+              <input 
+                v-model="fullName" 
+                type="text" 
+                required
+                placeholder="Juan Dela Cruz"
+                class="w-full bg-transparent text-white text-xs placeholder:text-[#858994] outline-none"
+              />
+            </div>
+          </div>
 
-.badge-pill-amber {
-  background: rgba(245, 158, 11, 0.16) !important;
-  color: #fbbf24 !important;
-  border: 1px solid rgba(245, 158, 11, 0.35) !important;
-}
+          <!-- EMAIL (SYSTEM LOCKED) -->
+          <div class="flex flex-col gap-1">
+            <label class="trainext-label">EMAIL ADDRESS (SYSTEM LOCKED)</label>
+            <div class="trainext-spec-input-line flex items-center gap-2 pb-2 opacity-60">
+              <svg class="w-3.5 h-3.5 text-[#858994] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+              <input 
+                :value="userEmail" 
+                type="email" 
+                disabled
+                class="w-full bg-transparent text-slate-400 text-xs cursor-not-allowed outline-none"
+              />
+            </div>
+          </div>
 
-.badge-pill-cyan {
-  background: rgba(0, 194, 255, 0.16) !important;
-  color: #00C2FF !important;
-  border: 1px solid rgba(0, 194, 255, 0.35) !important;
-}
-</style>
+          <!-- CONTACT NUMBER -->
+          <div class="flex flex-col gap-1">
+            <label class="trainext-label">CONTACT NUMBER</label>
+            <div class="trainext-spec-input-line flex items-center gap-2 pb-2">
+              <svg class="w-3.5 h-3.5 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+              </svg>
+              <input 
+                v-model="contactNumber" 
+                type="tel" 
+                placeholder="e.g. +63 912 345 6789"
+                class="w-full bg-transparent text-white text-xs placeholder:text-[#858994] outline-none"
+              />
+            </div>
+          </div>
+
+          <!-- CHANGE PASSWORD SECTION -->
+          <div class="pt-2 border-t border-white/10 flex flex-col gap-3">
+            <span class="trainext-label text-[#00d9ff]">CHANGE PASSWORD (LEAVE BLANK TO KEEP CURRENT)</span>
+
+            <!-- NEW PASSWORD -->
+            <div class="flex flex-col gap-1">
+              <div class="trainext-spec-input-line flex items-center gap-2 pb-2">
+                <svg class="w-3.5 h-3.5 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                <input 
+                  v-model="newPassword" 
+                  :type="showPassword ? 'text' : 'password'"
+                  placeholder="New password (min. 8 characters)"
+                  class="w-full bg-transparent text-white text-xs placeholder:text-[#858994] outline-none"
+                />
+                <button 
+                  type="button" 
+                  @click="showPassword = !showPassword"
+                  class="text-slate-400 hover:text-white transition cursor-pointer"
+                >
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- CONFIRM NEW PASSWORD -->
+            <div v-if="newPassword" class="flex flex-col gap-1">
+              <div class="trainext-spec-input-line flex items-center gap-2 pb-2">
+                <svg class="w-3.5 h-3.5 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+                <input 
+                  v-model="confirmPassword" 
+                  :type="showPassword ? 'text' : 'password'"
+                  placeholder="Re-enter new password"
+                  class="w-full bg-transparent text-white text-xs placeholder:text-[#858994] outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- ACTIONS -->
+          <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-white/10">
+            <button 
+              type="button" 
+              @click="emit('close')"
+              :disabled="isSubmitting"
+              class="px-4 py-2 rounded-full border border-white/20 text-xs text-slate-300 hover:text-white transition cursor-pointer"
+            >
+              Cancel
+            </button>
+
+            <button 
+              type="submit" 
+              :disabled="isSubmitting"
+              class="trainext-btn-pill-primary h-[38px] px-5 text-xs"
+            >
+              {{ isSubmitting ? 'SAVING...' : 'SAVE CHANGES' }}
+            </button>
+          </div>
+
+        </form>
+
+      </div>
+    </div>
+  </template>

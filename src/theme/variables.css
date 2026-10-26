@@ -1,100 +1,118 @@
-/* Tailwind CSS v4 */
-@import "tailwindcss";
+  @import "tailwindcss";
 
-@font-face {
-  font-family: 'Aileron';
-  src: local('Aileron'), local('Aileron-Regular');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
+  @font-face {
+    font-family: 'Aileron';
+    src: local('Aileron'), local('Aileron-Regular');
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+  }
 
-@font-face {
-  font-family: 'Aileron';
-  src: local('Aileron Bold'), local('Aileron-Bold');
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
+  @font-face {
+    font-family: 'Aileron';
+    src: local('Aileron SemiBold'), local('Aileron-SemiBold');
+    font-weight: 600;
+    font-style: normal;
+    font-display: swap;
+  }
 
-@font-face {
-  font-family: 'Aileron Heavy';
-  src: local('Aileron Heavy'), local('Aileron-Heavy');
-  font-weight: 900;
-  font-style: normal;
-  font-display: swap;
-}
+  @font-face {
+    font-family: 'Aileron';
+    src: local('Aileron Bold'), local('Aileron-Bold');
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+  }
 
-@font-face {
-  font-family: 'Aileron Bold';
-  src: local('Aileron Bold'), local('Aileron-Bold');
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
+  @font-face {
+    font-family: 'Aileron';
+    src: local('Aileron Heavy'), local('Aileron-Heavy');
+    font-weight: 900;
+    font-style: normal;
+    font-display: swap;
+  }
 
-:root {
-  --ion-background-color: transparent;
-  --ion-background-color-rgb: 2, 6, 17;
-  --ion-text-color: #ffffff;
-  --ion-text-color-rgb: 255, 255, 255;
-  --ion-toolbar-background: transparent;
-  --ion-card-background: transparent;
-  --trainext-cyan: #00c2ff;
-  --trainext-cyan-glow: #38bdf8;
-}
+  :root {
+    --ion-background-color: transparent;
+    --ion-background-color-rgb: 5, 6, 9;
+    --ion-text-color: #ffffff;
+    --ion-text-color-rgb: 255, 255, 255;
+    --ion-toolbar-background: transparent;
+    --ion-card-background: transparent;
 
-html,
-body {
-  background-color: #020611 !important;
-  color: #ffffff;
-  font-family: 'Aileron', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
+    /* TraiNext Specification Colors */
+    --color-midnight-navy: #050820;
+    --color-deep-black: #050609;
+    --color-primary-cyan: #00D9FF;
+    --color-secondary-blue: #00AFFF;
+    --color-muted-gray: #858994;
+    --color-border-white: rgba(230, 235, 245, 0.65);
+  }
 
-ion-app,
-ion-content {
-  --background: transparent !important;
-  background: transparent !important;
-}
+  html,
+  body {
+    background-color: #050609 !important;
+    color: #ffffff;
+    font-family: 'Aileron', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+  }
 
-ion-content::part(background) {
-  background: transparent !important;
-}
+  ion-app,
+  ion-content {
+    --background: transparent !important;
+    background: transparent !important;
+  }
 
-.trainext-glass-panel {
-  background: rgba(4, 9, 22, 0.45);
-  backdrop-filter: blur(8px) saturate(140%);
-  -webkit-backdrop-filter: blur(8px) saturate(140%);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 28px;
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.35), 0 20px 50px rgba(0, 0, 0, 0.85);
-}
+  ion-content::part(background) {
+    background: transparent !important;
+  }
 
-.trainext-glass-input {
-  background: transparent;
-  border-bottom: 1.25px solid rgba(255, 255, 255, 0.35);
-  color: #ffffff;
-  transition: border-color 200ms ease;
-}
+  /* Section 4: Glassmorphism Card Specs */
+  .trainext-spec-glass {
+    background: rgba(5, 6, 9, 0.25);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    border: 1px solid rgba(230, 235, 245, 0.65);
+    border-radius: 30px;
+  }
 
-.trainext-glass-input:focus-within {
-  border-bottom-color: #00c2ff;
-}
+  /* Section 6 & 8.E: Primary Button */
+  .trainext-spec-btn-primary {
+    width: 174px;
+    height: 52px;
+    background: linear-gradient(180deg, #F8FCFF 0%, #BCEEFF 55%, #53D8F8 100%);
+    color: #050609;
+    border-radius: 9999px;
+    font-family: 'Aileron', sans-serif;
+    font-weight: 700;
+    font-size: 13.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    cursor: pointer;
+    transition: opacity 150ms ease, transform 150ms ease;
+  }
 
-.trainext-btn-primary {
-  background: linear-gradient(135deg, #a5f3fc 0%, #67e8f9 45%, #38bdf8 100%);
-  color: #000000;
-  font-weight: 900;
-  border-radius: 9999px;
-  box-shadow: 0 0 20px rgba(56, 189, 248, 0.5);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
+  .trainext-spec-btn-primary:active {
+    transform: scale(0.98);
+  }
 
-.trainext-label {
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: #cbd5e1;
-  font-weight: 700;
-}
+  .trainext-spec-btn-primary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  /* Minimalist Underline Input */
+  .trainext-spec-input-line {
+    border-bottom: 1px solid rgba(230, 235, 245, 0.35);
+    transition: border-color 180ms ease;
+  }
+
+  .trainext-spec-input-line:focus-within {
+    border-bottom-color: #00D9FF;
+  }

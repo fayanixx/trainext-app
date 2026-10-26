@@ -1,156 +1,134 @@
-<script setup lang="ts">
-import { computed } from 'vue';
+  <script setup lang="ts">
+  import { computed } from 'vue';
 
-const props = defineProps<{
-  isOpen: boolean;
-  mediaUrl: string | null;
-  mediaType: 'image' | 'document' | 'video' | null;
-  title?: string;
-}>();
+  const props = defineProps<{
+    isOpen: boolean;
+    mediaUrl: string | null;
+    mediaType: 'image' | 'document' | 'video' | null;
+    title?: string;
+  }>();
 
-const emit = defineEmits<{
-  (e: 'close'): void;
-}>();
+  const emit = defineEmits<{
+    (e: 'close'): void;
+  }>();
 
-// Transform standard external links (YouTube, Loom) into embeddable URLs
-const embedVideoUrl = computed(() => {
-  if (!props.mediaUrl) return '';
-  const url = props.mediaUrl.trim();
+  // Embed Formatter for YouTube / Drive links
+  const formattedVideoEmbedUrl = computed(() => {
+    if (!props.mediaUrl) return '';
+    const url = props.mediaUrl;
 
-  // YouTube match
-  const ytMatch = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/))([\w-]{11})/);
-  if (ytMatch) {
-    return `https://www.youtube.com/embed/${ytMatch[1]}`;
-  }
+    // YouTube standard watch link
+    if (url.includes('youtube.com/watch?v=')) {
+      const videoId = url.split('v=')[1]?.split('&')[0];
+      return `https://www.youtube.com/embed/${videoId}`;
+    }
+    // YouTube shortened link
+    if (url.includes('youtu.be/')) {
+      const videoId = url.split('youtu.be/')[1]?.split('?')[0];
+      return `https://www.youtube.com/embed/${videoId}`;
+    }
+    // Google Drive preview link
+    if (url.includes('drive.google.com') && url.includes('/view')) {
+      return url.replace('/view', '/preview');
+    }
 
-  // Loom match
-  const loomMatch = url.match(/loom\.com\/share\/([a-zA-Z0-9]+)/);
-  if (loomMatch) {
-    return `https://www.loom.com/embed/${loomMatch[1]}`;
-  }
+    return url;
+  });
+  </script>
 
-  return url;
-});
-
-const isDirectVideoFile = computed(() => {
-  if (!props.mediaUrl) return false;
-  return /\.(mp4|webm|ogg|mov)$/i.test(props.mediaUrl);
-});
-
-const isPdf = computed(() => {
-  if (!props.mediaUrl) return false;
-  return /\.pdf$/i.test(props.mediaUrl);
-});
-</script>
-
-<template>
-  <Transition name="fade">
-    <div v-if="isOpen && mediaUrl" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-navy-950/85 backdrop-blur-md">
-      <!-- Backdrop dismiss -->
-      <div class="fixed inset-0" @click="emit('close')"></div>
-
-      <!-- Viewer Container -->
-      <div 
-        class="relative w-full max-w-4xl max-h-[90vh] bg-[#0d1527]/95 border border-cyan-500/35 rounded-3xl
-               shadow-[0_0_50px_rgba(6,182,212,0.25)] text-slate-100 z-10 backdrop-blur-2xl flex flex-col overflow-hidden"
-      >
-        <!-- Modal Top Bar -->
-        <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800/80 bg-slate-900/50">
-          <div class="truncate max-w-[80%]">
-            <h3 class="text-sm font-bold text-white tracking-wide truncate">
-              {{ title || 'Proof Attachment Inspector' }}
-            </h3>
-            <span class="text-[10px] uppercase font-mono tracking-widest text-cyan-400">
-              Type: {{ mediaType }}
-            </span>
+  <template>
+    <div 
+      v-if="isOpen && mediaUrl" 
+      class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-md select-none overflow-y-auto"
+    >
+      <div class="w-full max-w-3xl my-auto trainext-glass-card rounded-[28px] p-5 sm:p-6 flex flex-col gap-4 border border-white/20 shadow-2xl">
+        
+        <!-- HEADER -->
+        <div class="flex items-center justify-between pb-3 border-b border-white/10">
+          <div>
+            <span class="trainext-label">{{ mediaType ? mediaType.toUpperCase() : 'VERIFICATION PROOF' }}</span>
+            <h2 class="text-base font-bold text-white tracking-tight truncate max-w-sm sm:max-w-md">
+              {{ title || 'Accomplishment Attachment' }}
+            </h2>
           </div>
 
           <div class="flex items-center gap-2">
+            <!-- Open Raw Link in New Tab -->
             <a 
               :href="mediaUrl" 
               target="_blank" 
               rel="noopener noreferrer"
-              class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-300 hover:text-white transition flex items-center gap-1"
+              class="px-3 py-1.5 rounded-full border border-white/20 text-[10px] text-slate-300 hover:text-white transition flex items-center gap-1.5 cursor-pointer"
             >
-              <span>↗</span>
-              <span>Open External</span>
+              <svg class="w-3.5 h-3.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+              <span class="hidden sm:inline">Open Original</span>
             </a>
+
+            <!-- Close Modal -->
             <button 
+              type="button" 
               @click="emit('close')"
-              class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-sm transition"
+              class="w-8 h-8 rounded-full border border-white/20 flex items-center justify-center text-slate-400 hover:text-white transition cursor-pointer"
             >
-              ✕
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
           </div>
         </div>
 
-        <!-- Dynamic Content Viewer Area -->
-        <div class="flex-1 p-4 sm:p-6 overflow-y-auto flex items-center justify-center min-h-[300px] bg-slate-950/40">
+        <!-- MEDIA DISPLAY CONTAINER -->
+        <div class="w-full min-h-[300px] max-h-[70vh] rounded-2xl bg-black/60 border border-white/10 flex items-center justify-center overflow-hidden">
           
           <!-- 1. IMAGE VIEWER -->
-          <div v-if="mediaType === 'image'" class="max-h-[70vh] flex items-center justify-center">
+          <div v-if="mediaType === 'image'" class="w-full h-full flex items-center justify-center p-2">
             <img 
               :src="mediaUrl" 
-              alt="Accomplishment Proof" 
-              class="max-h-[70vh] max-w-full rounded-2xl object-contain border border-slate-800 shadow-2xl"
+              alt="Proof Document" 
+              class="max-w-full max-h-[65vh] object-contain rounded-xl"
             />
           </div>
 
-          <!-- 2. DOCUMENT VIEWER -->
-          <div v-else-if="mediaType === 'document'" class="w-full h-[65vh] flex flex-col items-center justify-center">
+          <!-- 2. DOCUMENT / PDF VIEWER -->
+          <div v-else-if="mediaType === 'document'" class="w-full h-[65vh]">
             <iframe 
-              v-if="isPdf" 
               :src="mediaUrl" 
-              class="w-full h-full rounded-2xl border border-slate-800 bg-white"
+              class="w-full h-full border-0 rounded-xl bg-white/5"
+              title="Attached Document"
             ></iframe>
-            <div v-else class="text-center p-8 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-3">
-              <div class="text-4xl">📄</div>
-              <p class="text-sm text-slate-200 font-semibold truncate max-w-md">
-                {{ mediaUrl.split('/').pop() }}
-              </p>
-              <p class="text-xs text-slate-400">
-                Direct browser preview is not supported for this file type (DOCX/Binary).
-              </p>
-              <a 
-                :href="mediaUrl" 
-                download
-                class="inline-block px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs uppercase tracking-wider transition"
-              >
-                Download Document
-              </a>
-            </div>
           </div>
 
-          <!-- 3. VIDEO VIEWER -->
-          <div v-else-if="mediaType === 'video'" class="w-full h-[65vh] flex items-center justify-center">
-            <!-- Native Video Tag for uploaded files -->
-            <video 
-              v-if="isDirectVideoFile" 
-              :src="mediaUrl" 
-              controls 
-              autoplay 
-              class="max-h-[65vh] max-w-full rounded-2xl border border-slate-800 bg-black"
-            ></video>
-
-            <!-- Embedded Player for external platforms (YouTube/Loom) -->
+          <!-- 3. VIDEO / EMBED PLAYER -->
+          <div v-else-if="mediaType === 'video'" class="w-full aspect-video max-h-[65vh]">
             <iframe 
-              v-else 
-              :src="embedVideoUrl" 
-              class="w-full h-full rounded-2xl border border-slate-800"
+              :src="formattedVideoEmbedUrl" 
+              class="w-full h-full border-0 rounded-xl"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
               allowfullscreen
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              title="Proof Video"
             ></iframe>
           </div>
+
+          <!-- FALLBACK -->
+          <div v-else class="text-center p-8 text-xs text-[#858994]">
+            Unable to preview this file format directly. Please click "Open Original" above.
+          </div>
+
         </div>
+
+        <!-- FOOTER CLOSE -->
+        <div class="flex justify-end pt-1">
+          <button 
+            type="button" 
+            @click="emit('close')"
+            class="trainext-btn-pill-primary h-[36px] px-6 text-xs"
+          >
+            CLOSE
+          </button>
+        </div>
+
       </div>
     </div>
-  </Transition>
-</template>
-<style scoped>
-.fade-enter-active, .fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-.fade-enter-from, .fade-leave-to {
-  opacity: 0;
-}
-</style>
+  </template>

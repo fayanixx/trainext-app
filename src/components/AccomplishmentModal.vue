@@ -1,355 +1,259 @@
-<script setup lang="ts">
-import { ref, watch } from 'vue';
-import { useAccomplishmentsStore } from '@/stores/accomplishments';
-import type { AccomplishmentLog } from '@/types';
+  <script setup lang="ts">
+  import { ref } from 'vue';
+  import { supabase } from '@/lib/supabase';
 
-const props = defineProps<{
-  isOpen: boolean;
-  internId: string;
-  supervisorId?: string;
-  initialData?: AccomplishmentLog | null;
-}>();
+  const props = defineProps<{
+    isOpen: boolean;
+    internId: string;
+  }>();
 
-const emit = defineEmits<{
-  (e: 'close'): void;
-  (e: 'saved', log: AccomplishmentLog): void;
-}>();
+  const emit = defineEmits<{
+    (e: 'close'): void;
+    (e: 'saved'): void;
+  }>();
 
-const accomplishmentsStore = useAccomplishmentsStore();
+  // Form Fields
+  const title = ref('');
+  const description = ref('');
+  const reportDate = ref(new Date().toISOString().split('T')[0]);
+  const renderedHours = ref<number | ''>(8);
+  const videoUrl = ref('');
 
-// Form States
-const title = ref('');
-const description = ref('');
-const reportDate = ref(new Date().toISOString().split('T')[0]);
-const renderedHours = ref<number>(8);
-const proofImages = ref<string[]>([]);
-const proofDocuments = ref<string[]>([]);
-const videoUrl = ref('');
+  // Media Uploads
+  const imageFiles = ref<File[]>([]);
+  const docFiles = ref<File[]>([]);
+  const isUploading = ref(false);
+  const errorMessage = ref('');
 
-// UI States
-const isUploading = ref(false);
-const uploadProgressText = ref('');
-const formError = ref('');
-
-// Watch initial data for edit mode
-watch(
-  () => props.initialData,
-  (log) => {
-    if (log) {
-      title.value = log.title;
-      description.value = log.description;
-      reportDate.value = log.report_date;
-      renderedHours.value = log.rendered_hours;
-      proofImages.value = [...(log.proof_images || [])];
-      proofDocuments.value = [...(log.proof_documents || [])];
-      videoUrl.value = log.video_url || '';
-    } else {
-      resetForm();
+  const handleImageChange = (e: Event) => {
+    const target = e.target as HTMLInputElement;
+    if (target.files) {
+      imageFiles.value = Array.from(target.files);
     }
-  },
-  { immediate: true }
-);
+  };
 
-function resetForm() {
-  title.value = '';
-  description.value = '';
-  reportDate.value = new Date().toISOString().split('T')[0];
-  renderedHours.value = 8;
-  proofImages.value = [];
-  proofDocuments.value = [];
-  videoUrl.value = '';
-  formError.value = '';
-}
+  const handleDocChange = (e: Event) => {
+    const target = e.target as HTMLInputElement;
+    if (target.files) {
+      docFiles.value = Array.from(target.files);
+    }
+  };
 
-// Multi-Proof File Upload Handler
-const handleFileUpload = async (event: Event, type: 'images' | 'documents' | 'videos') => {
-  const target = event.target as HTMLInputElement;
-  const files = target.files;
-  if (!files || files.length === 0) return;
+  const uploadFilesToBucket = async (files: File[], folder: string): Promise<string[]> => {
+    const urls: string[] = [];
+    for (const file of files) {
+      const fileExt = file.name.split('.').pop();
+      const filePath = `${props.internId}/${folder}/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
 
-  isUploading.value = true;
-  formError.value = '';
+      const { error: uploadError } = await supabase.storage
+        .from('proofs')
+        .upload(filePath, file);
 
-  try {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      uploadProgressText.value = `Uploading ${file.name}...`;
+      if (uploadError) throw uploadError;
 
-      const publicUrl = await accomplishmentsStore.uploadProofFile(file, type);
-
-      if (type === 'images') {
-        proofImages.value.push(publicUrl);
-      } else if (type === 'documents') {
-        proofDocuments.value.push(publicUrl);
-      } else if (type === 'videos') {
-        videoUrl.value = publicUrl;
+      const { data } = supabase.storage.from('proofs').getPublicUrl(filePath);
+      if (data?.publicUrl) {
+        urls.push(data.publicUrl);
       }
     }
-  } catch (err: any) {
-    formError.value = err.message || 'File upload failed. Please try again.';
-  } finally {
-    isUploading.value = false;
-    uploadProgressText.value = '';
-    target.value = ''; // Reset input
-  }
-};
+    return urls;
+  };
 
-const removeImage = (index: number) => {
-  proofImages.value.splice(index, 1);
-};
-
-const removeDocument = (index: number) => {
-  proofDocuments.value.splice(index, 1);
-};
-
-// Save / Submit Form
-const handleSubmit = async () => {
-  formError.value = '';
-
-  if (!title.value.trim() || !description.value.trim()) {
-    formError.value = 'Please provide both a task title and description.';
-    return;
-  }
-
-  if (renderedHours.value <= 0) {
-    formError.value = 'Rendered hours must be greater than zero.';
-    return;
-  }
-
-  try {
-    if (props.initialData?.id) {
-      // Edit Mode
-      const updated = await accomplishmentsStore.updateLog(props.initialData.id, {
-        title: title.value,
-        description: description.value,
-        report_date: reportDate.value,
-        rendered_hours: renderedHours.value,
-        proof_images: proofImages.value,
-        proof_documents: proofDocuments.value,
-        video_url: videoUrl.value || null,
-      });
-      if (updated) emit('saved', updated);
-    } else {
-      // Create Mode
-      const created = await accomplishmentsStore.createLog({
-        internId: props.internId,
-        supervisorId: props.supervisorId,
-        title: title.value,
-        description: description.value,
-        reportDate: reportDate.value,
-        renderedHours: renderedHours.value,
-        proofImages: proofImages.value,
-        proofDocuments: proofDocuments.value,
-        videoUrl: videoUrl.value || null,
-      });
-      if (created) emit('saved', created);
+  const handleSubmit = async () => {
+    if (!title.value.trim() || !description.value.trim() || !renderedHours.value) {
+      errorMessage.value = 'Please provide title, description, and rendered hours.';
+      return;
     }
-    emit('close');
-  } catch (err: any) {
-    formError.value = err.message || 'Failed to save accomplishment log.';
-  }
-};
-</script>
 
-<template>
-  <Transition name="fade">
-    <div v-if="isOpen" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-navy-950/80 backdrop-blur-md">
-      <!-- Backdrop Dismiss -->
-      <div class="fixed inset-0" @click="emit('close')"></div>
+    isUploading.value = true;
+    errorMessage.value = '';
 
-      <!-- Glass Modal Sheet Container -->
-      <div 
-        class="relative w-full sm:max-w-2xl max-h-[92vh] overflow-y-auto z-10 flex flex-col
-               bg-[#0d1527]/95 border-t sm:border border-cyan-500/35 rounded-t-[2.5rem] sm:rounded-3xl
-               shadow-[0_0_50px_rgba(6,182,212,0.22)] text-slate-100 backdrop-blur-2xl"
-      >
-        <!-- Mobile Drawer Drag Handle -->
-        <div class="sm:hidden w-12 h-1 bg-slate-600/60 rounded-full mx-auto mt-3 mb-1"></div>
+    try {
+      const [uploadedImages, uploadedDocs] = await Promise.all([
+        uploadFilesToBucket(imageFiles.value, 'images'),
+        uploadFilesToBucket(docFiles.value, 'documents'),
+      ]);
 
-        <!-- Header -->
-        <div class="flex items-center justify-between px-6 py-4 border-b border-slate-800/80">
+      const { error } = await supabase.from('accomplishment_reports').insert({
+        intern_id: props.internId,
+        title: title.value.trim(),
+        description: description.value.trim(),
+        report_date: reportDate.value,
+        rendered_hours: Number(renderedHours.value),
+        proof_images: uploadedImages,
+        proof_documents: uploadedDocs,
+        video_url: videoUrl.value.trim() || null,
+        status: 'pending',
+      });
+
+      if (error) throw error;
+
+      // Reset Form
+      title.value = '';
+      description.value = '';
+      renderedHours.value = 8;
+      videoUrl.value = '';
+      imageFiles.value = [];
+      docFiles.value = [];
+
+      emit('saved');
+      emit('close');
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to submit accomplishment report.';
+    } finally {
+      isUploading.value = false;
+    }
+  };
+  </script>
+
+  <template>
+    <div 
+      v-if="isOpen" 
+      class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm select-none overflow-y-auto"
+    >
+      <div class="w-full max-w-lg my-auto trainext-glass-card rounded-[28px] p-6 flex flex-col gap-4 border border-white/20 shadow-2xl">
+        
+        <!-- HEADER -->
+        <div class="flex items-center justify-between pb-2 border-b border-white/10">
           <div>
-            <h3 class="text-base font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-fuchsia-400">
-              {{ initialData ? 'Edit Accomplishment Log' : 'New Accomplishment Log' }}
-            </h3>
-            <p class="text-[11px] text-slate-400 mt-0.5">
-              Document completed work with multi-proof attachments
-            </p>
+            <h2 class="text-base font-bold text-white tracking-tight">New Accomplishment Report</h2>
+            <p class="text-[11px] text-[#00d9ff]">Document your daily tasks and attach verification evidence.</p>
           </div>
           <button 
+            type="button" 
             @click="emit('close')"
-            class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-800/70 hover:bg-slate-700 text-slate-300 text-sm transition"
+            class="text-slate-400 hover:text-white transition cursor-pointer p-1"
           >
-            ✕
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
 
-        <!-- Form Fields -->
-        <div class="p-6 space-y-4 overflow-y-auto">
-          <!-- Error Banner -->
-          <div v-if="formError" class="p-3.5 rounded-xl bg-red-950/60 border border-red-500/40 text-xs text-red-300 font-medium">
-            {{ formError }}
-          </div>
+        <!-- ERROR MESSAGE -->
+        <div v-if="errorMessage" class="p-2.5 rounded-xl bg-red-950/60 border border-red-500/40 text-xs text-red-200">
+          {{ errorMessage }}
+        </div>
 
-          <!-- Uploading Spinner Banner -->
-          <div v-if="isUploading" class="p-3 rounded-xl bg-cyan-950/60 border border-cyan-500/40 text-xs text-cyan-300 flex items-center gap-2">
-            <span class="animate-spin">⏳</span>
-            <span>{{ uploadProgressText }}</span>
-          </div>
-
-          <!-- Task Title -->
-          <div class="space-y-1">
-            <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Task Title</label>
+        <!-- FORM FIELDS -->
+        <form @submit.prevent="handleSubmit" class="flex flex-col gap-3.5">
+          
+          <!-- TITLE -->
+          <div class="flex flex-col gap-1">
+            <label class="trainext-label">TASK / MODULE TITLE</label>
             <input 
               v-model="title" 
               type="text" 
               required
-              placeholder="e.g., Developed API Endpoints / Office Network Configuration"
-              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-100 text-sm focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 outline-none transition"
+              placeholder="e.g. Backend API Endpoint Authentication"
+              class="w-full h-9 px-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white placeholder:text-[#858994] outline-none focus:border-[#00d9ff]"
             />
           </div>
 
-          <!-- Date & Rendered Hours Grid -->
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div class="space-y-1">
-              <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Date</label>
+          <!-- DATES AND HOURS ROW -->
+          <div class="grid grid-cols-2 gap-3">
+            <div class="flex flex-col gap-1">
+              <label class="trainext-label">REPORT DATE</label>
               <input 
                 v-model="reportDate" 
                 type="date" 
                 required
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-100 text-sm focus:border-cyan-400 outline-none transition"
+                class="w-full h-9 px-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white outline-none focus:border-[#00d9ff]"
               />
             </div>
-            <div class="space-y-1">
-              <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Hours Rendered</label>
+
+            <div class="flex flex-col gap-1">
+              <label class="trainext-label">HOURS RENDERED</label>
               <input 
                 v-model.number="renderedHours" 
                 type="number" 
-                step="0.5" 
                 min="0.5" 
-                max="24"
+                max="24" 
+                step="0.5"
                 required
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-100 text-sm font-mono focus:border-cyan-400 outline-none transition"
+                placeholder="8"
+                class="w-full h-9 px-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white outline-none focus:border-[#00d9ff]"
               />
             </div>
           </div>
 
-          <!-- Task Details & Description -->
-          <div class="space-y-1">
-            <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Description & Outputs</label>
+          <!-- DESCRIPTION -->
+          <div class="flex flex-col gap-1">
+            <label class="trainext-label">DETAILED ACCOMPLISHMENT DESCRIPTION</label>
             <textarea 
               v-model="description" 
               rows="3" 
               required
-              placeholder="Provide a detailed breakdown of tasks finished, tools utilized, and challenges addressed..."
-              class="w-full px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-100 text-xs focus:border-cyan-400 outline-none transition"
+              placeholder="Summarize tasks completed, technologies utilized, challenges resolved..."
+              class="w-full p-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white placeholder:text-[#858994] outline-none focus:border-[#00d9ff] resize-none"
             ></textarea>
           </div>
 
-          <!-- MULTI-PROOF ATTACHMENTS SECTION -->
-          <div class="pt-2 border-t border-slate-800/80 space-y-3">
-            <label class="text-[11px] font-bold text-cyan-400 uppercase tracking-wider block">
-              Multi-Proof Attachments
-            </label>
-
-            <!-- 1. Photos / Screenshots -->
-            <div class="space-y-2">
-              <div class="flex items-center justify-between text-xs">
-                <span class="text-slate-300 font-semibold">Photos & Screenshots ({{ proofImages.length }})</span>
-                <label class="text-[11px] text-cyan-400 hover:text-cyan-300 font-bold cursor-pointer">
-                  + Add Images
-                  <input type="file" multiple accept="image/*" class="hidden" @change="handleFileUpload($event, 'images')" />
-                </label>
-              </div>
-
-              <!-- Images Preview Chips -->
-              <div v-if="proofImages.length > 0" class="flex flex-wrap gap-2">
-                <div 
-                  v-for="(img, idx) in proofImages" 
-                  :key="idx" 
-                  class="relative group rounded-xl overflow-hidden border border-cyan-500/30 w-16 h-16 bg-slate-900"
-                >
-                  <img :src="img" alt="Proof" class="w-full h-full object-cover" />
-                  <button 
-                    @click="removeImage(idx)" 
-                    class="absolute inset-0 bg-red-950/80 text-white font-bold text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
+          <!-- PROOFS ATTACHMENT STRIP -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <!-- Screenshots -->
+            <div class="flex flex-col gap-1">
+              <label class="trainext-label">SCREENSHOTS / PHOTOS</label>
+              <label class="h-9 px-3 rounded-xl bg-white/[0.03] border border-white/15 hover:border-[#00d9ff]/50 flex items-center justify-between cursor-pointer transition text-xs text-[#858994]">
+                <span class="truncate">{{ imageFiles.length ? `${imageFiles.length} image(s) selected` : 'Select images...' }}</span>
+                <svg class="w-3.5 h-3.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <input type="file" multiple accept="image/*" @change="handleImageChange" class="hidden" />
+              </label>
             </div>
 
-            <!-- 2. Documents (PDF / DOCX) -->
-            <div class="space-y-2 pt-2 border-t border-slate-800/60">
-              <div class="flex items-center justify-between text-xs">
-                <span class="text-slate-300 font-semibold">Documents & Sheets ({{ proofDocuments.length }})</span>
-                <label class="text-[11px] text-cyan-400 hover:text-cyan-300 font-bold cursor-pointer">
-                  + Add File (PDF/DOCX)
-                  <input type="file" multiple accept=".pdf,.doc,.docx" class="hidden" @change="handleFileUpload($event, 'documents')" />
-                </label>
-              </div>
-
-              <div v-if="proofDocuments.length > 0" class="space-y-1">
-                <div 
-                  v-for="(doc, idx) in proofDocuments" 
-                  :key="idx"
-                  class="p-2 rounded-xl bg-slate-900/80 border border-slate-800 text-[11px] flex items-center justify-between"
-                >
-                  <span class="truncate max-w-[80%] text-slate-300">📄 {{ doc.split('/').pop() }}</span>
-                  <button @click="removeDocument(idx)" class="text-red-400 hover:text-red-300 font-bold px-2">✕</button>
-                </div>
-              </div>
+            <!-- Documents -->
+            <div class="flex flex-col gap-1">
+              <label class="trainext-label">DOCUMENTS / PDF</label>
+              <label class="h-9 px-3 rounded-xl bg-white/[0.03] border border-white/15 hover:border-[#00d9ff]/50 flex items-center justify-between cursor-pointer transition text-xs text-[#858994]">
+                <span class="truncate">{{ docFiles.length ? `${docFiles.length} file(s) selected` : 'Select files...' }}</span>
+                <svg class="w-3.5 h-3.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+                <input type="file" multiple accept=".pdf,.doc,.docx,.txt" @change="handleDocChange" class="hidden" />
+              </label>
             </div>
+          </div>
 
-            <!-- 3. Video Walkthrough (File Upload or External Link) -->
-            <div class="space-y-2 pt-2 border-t border-slate-800/60">
-              <div class="flex items-center justify-between text-xs">
-                <span class="text-slate-300 font-semibold">Video Walkthrough (Clip or External URL)</span>
-                <label class="text-[11px] text-cyan-400 hover:text-cyan-300 font-bold cursor-pointer">
-                  + Upload Video File
-                  <input type="file" accept="video/*" class="hidden" @change="handleFileUpload($event, 'videos')" />
-                </label>
-              </div>
-
+          <!-- VIDEO LINK -->
+          <div class="flex flex-col gap-1">
+            <label class="trainext-label">DEMO VIDEO LINK (OPTIONAL)</label>
+            <div class="relative">
               <input 
                 v-model="videoUrl" 
                 type="url" 
-                placeholder="Or paste video link (e.g., Google Drive, Loom, YouTube)"
-                class="w-full px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-100 text-xs focus:border-cyan-400 outline-none transition"
+                placeholder="https://youtu.be/... or Drive link"
+                class="w-full h-9 px-3 pl-8 rounded-xl bg-black/40 border border-white/15 text-xs text-white placeholder:text-[#858994] outline-none focus:border-[#00d9ff]"
               />
+              <svg class="w-3.5 h-3.5 text-[#00d9ff] absolute left-2.5 top-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
             </div>
           </div>
-        </div>
 
-        <!-- Footer Actions -->
-        <div class="px-6 py-4 border-t border-slate-800/80 bg-slate-900/40 flex items-center justify-end gap-3">
-          <button 
-            type="button" 
-            @click="emit('close')"
-            class="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-400 hover:text-white transition"
-          >
-            Cancel
-          </button>
-          <button 
-            type="button" 
-            @click="handleSubmit"
-            :disabled="accomplishmentsStore.loading || isUploading"
-            class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs uppercase tracking-wider shadow-[0_0_20px_rgba(6,182,212,0.35)] disabled:opacity-50 transition"
-          >
-            {{ accomplishmentsStore.loading ? 'Saving Log...' : (initialData ? 'Save Changes' : 'Submit Accomplishment') }}
-          </button>
-        </div>
+          <!-- ACTIONS -->
+          <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-white/10">
+            <button 
+              type="button" 
+              @click="emit('close')"
+              :disabled="isUploading"
+              class="px-4 py-2 rounded-full border border-white/20 text-xs text-slate-300 hover:text-white transition cursor-pointer"
+            >
+              Cancel
+            </button>
+
+            <button 
+              type="submit" 
+              :disabled="isUploading"
+              class="trainext-btn-pill-primary h-[38px] px-5 text-xs"
+            >
+              {{ isUploading ? 'UPLOADING...' : 'SUBMIT REPORT' }}
+            </button>
+          </div>
+
+        </form>
+
       </div>
     </div>
-  </Transition>
-</template>
-
-<style scoped>
-.fade-enter-active, .fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-.fade-enter-from, .fade-leave-to {
-  opacity: 0;
-}
-</style>
+  </template>

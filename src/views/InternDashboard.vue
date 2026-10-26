@@ -1,682 +1,487 @@
-<script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue';
-import { useRouter } from 'vue-router';
-import { supabase } from '@/lib/supabase';
-import { useAuthStore } from '@/stores/auth';
-import { useAttendanceStore } from '@/stores/attendance';
-import { useAccomplishmentsStore } from '@/stores/accomplishments';
-import { useGeolocation } from '@/composables/useGeolocation';
-import { validateGeofence, type GeofenceValidationResult } from '@/lib/geofence';
-import type { CompanySite, InternSupervisorLink, AccomplishmentLog } from '@/types';
-import GeofenceErrorModal from '@/components/GeofenceErrorModal.vue';
-import SafeAtBaseModal from '@/components/SafeAtBaseModal.vue';
-import AccomplishmentModal from '@/components/AccomplishmentModal.vue';
-import ProofViewerModal from '@/components/ProofViewerModal.vue';
+  <script setup lang="ts">
+  import { ref, onMounted, computed } from 'vue';
+  import { useRouter } from 'vue-router';
+  import { supabase } from '@/lib/supabase';
+  import { useAuthStore } from '@/stores/auth';
+  import { useAttendanceStore } from '@/stores/attendance';
+  import { useAccomplishmentsStore } from '@/stores/accomplishments';
+  import type { CompanySite } from '@/types';
+  import AccomplishmentModal from '@/components/AccomplishmentModal.vue';
+  import SafeAtBaseModal from '@/components/SafeAtBaseModal.vue';
+  import GeofenceErrorModal from '@/components/GeofenceErrorModal.vue';
+  import ProofViewerModal from '@/components/ProofViewerModal.vue';
 
-const router = useRouter();
-const authStore = useAuthStore();
-const attendanceStore = useAttendanceStore();
-const accomplishmentsStore = useAccomplishmentsStore();
-const { coordinates, loading: geoLoading, error: geoError, refreshLocation } = useGeolocation();
+  const router = useRouter();
+  const authStore = useAuthStore();
+  const attendanceStore = useAttendanceStore();
+  const accomplishmentsStore = useAccomplishmentsStore();
 
-// Dashboard & Affiliation States
-const loading = ref(true);
-const linkRecord = ref<InternSupervisorLink | null>(null);
-const assignedCompany = ref<CompanySite | null>(null);
-const availableCompanies = ref<CompanySite[]>([]);
-const selectedCompanyId = ref<string>('');
-const isSubmittingRequest = ref(false);
-const alertMessage = ref('');
-const errorMessage = ref('');
+  // UI Modals
+  const isAccomplishmentModalOpen = ref(false);
+  const isSafeAtBaseModalOpen = ref(false);
+  const isProofViewerOpen = ref(false);
+  const activeProofUrl = ref<string | null>(null);
+  const activeProofType = ref<'image' | 'document' | 'video' | null>(null);
+  const activeProofTitle = ref('');
 
-// DTR, Geofence, & Safe at Base States
-const geofenceResult = ref<GeofenceValidationResult | null>(null);
-const isGeofenceErrorOpen = ref(false);
-const isSafeAtBaseModalOpen = ref(false);
-const actionLoading = ref(false);
+  // State
+  const supervisorSite = ref<CompanySite | null>(null);
+  const internLinkStatus = ref<'none' | 'pending' | 'approved' | 'rejected'>('none');
+  const selectedSupervisorId = ref<string | null>(null);
+  const availableSupervisors = ref<any[]>([]);
+  const linkingLoading = ref(false);
+  const linkFeedback = ref<{ type: 'success' | 'error'; message: string } | null>(null);
 
-// Accomplishment Modals & Viewer States
-const isAccomplishmentModalOpen = ref(false);
-const editingAccomplishment = ref<AccomplishmentLog | null>(null);
-const isProofViewerOpen = ref(false);
-const activeProofUrl = ref<string | null>(null);
-const activeProofType = ref<'image' | 'document' | 'video' | null>(null);
-const activeProofTitle = ref('');
+  // Geofence Error State
+  const geofenceError = ref<{
+    isOpen: boolean;
+    companyName: string;
+    formattedDistance: string;
+    allowedRadius: number;
+  }>({
+    isOpen: false,
+    companyName: '',
+    formattedDistance: '0m',
+    allowedRadius: 0,
+  });
 
-// Affiliation Status Flags
-const isApproved = computed(() => linkRecord.value?.status === 'approved');
-const isPending = computed(() => linkRecord.value?.status === 'pending');
-const isRejected = computed(() => linkRecord.value?.status === 'rejected');
+  // Target Hours Progress Calculation
+  const requiredHours = 486;
+  const renderedHours = computed(() => {
+    return (attendanceStore.attendanceHistory || []).reduce(
+      (acc, log) => acc + (Number(log.hours_rendered) || 0),
+      0
+    );
+  });
 
-// Evaluate Geofence status
-const evaluateGeofence = () => {
-  if (!coordinates.value || !assignedCompany.value) {
-    geofenceResult.value = null;
-    return;
-  }
+  const progressPercentage = computed(() => {
+    const pct = (renderedHours.value / requiredHours) * 100;
+    return Math.min(Math.round(pct), 100);
+  });
 
-  const officeCoords = {
-    latitude: assignedCompany.value.latitude,
-    longitude: assignedCompany.value.longitude,
-  };
+  // Shift Status Helpers
+  const currentShift = computed(() => attendanceStore.activeShift);
+  const currentStatus = computed(() => attendanceStore.activeShift?.status || null);
 
-  geofenceResult.value = validateGeofence(
-    coordinates.value,
-    officeCoords,
-    assignedCompany.value.radius_meters || 150
-  );
-};
+  const currentStatusText = computed(() => {
+    if (currentStatus.value === 'on_duty') return 'On Duty';
+    if (currentStatus.value === 'in_transit') return 'In Transit';
+    if (currentStatus.value === 'safe_at_base') return 'Safe at Base';
+    return 'Not Clocked In';
+  });
 
-watch([coordinates, assignedCompany], () => {
-  evaluateGeofence();
-});
+  // Load Intern's Supervisor Affiliation Status
+  const fetchAffiliation = async () => {
+    if (!authStore.user?.id) return;
 
-// Fetch Available Supervisors with Active Company Sites
-const fetchAvailableCompanies = async () => {
-  try {
-    const { data, error } = await supabase
-      .from('company_sites')
-      .select('*');
-
-    if (error) throw error;
-    availableCompanies.value = (data as CompanySite[]) || [];
-  } catch (err: any) {
-    console.error('Failed to load companies:', err.message);
-  }
-};
-
-// Fetch Current Intern Link & Company Details
-const fetchInternLinkStatus = async () => {
-  if (!authStore.user?.id) return;
-
-  try {
-    const { data, error } = await supabase
-      .from('intern_supervisor_links')
-      .select(`
-        id,
-        intern_id,
-        supervisor_id,
-        status,
-        rejection_reason,
-        linked_at,
-        created_at
-      `)
-      .eq('intern_id', authStore.user.id)
-      .maybeSingle();
-
-    if (error) throw error;
-    linkRecord.value = (data as InternSupervisorLink) || null;
-
-    if (linkRecord.value?.status === 'approved') {
-      const { data: siteData, error: siteError } = await supabase
-        .from('company_sites')
-        .select('*')
-        .eq('supervisor_id', linkRecord.value.supervisor_id)
+    try {
+      const { data: linkData, error: linkErr } = await supabase
+        .from('intern_supervisor_links')
+        .select('status, supervisor_id')
+        .eq('intern_id', authStore.user.id)
         .maybeSingle();
 
-      if (!siteError && siteData) {
-        assignedCompany.value = siteData as CompanySite;
+      if (linkErr) throw linkErr;
+
+      if (linkData) {
+        internLinkStatus.value = linkData.status;
+        if (linkData.status === 'approved' && linkData.supervisor_id) {
+          const { data: siteData } = await supabase
+            .from('company_sites')
+            .select('*')
+            .eq('supervisor_id', linkData.supervisor_id)
+            .maybeSingle();
+
+          supervisorSite.value = (siteData as CompanySite) || null;
+        }
+      } else {
+        internLinkStatus.value = 'none';
+        const { data: sups } = await supabase
+          .from('profiles')
+          .select(`
+            id,
+            full_name,
+            company_sites (
+              id,
+              company_name,
+              office_address
+            )
+          `)
+          .eq('role', 'supervisor');
+
+        availableSupervisors.value = sups || [];
+      }
+    } catch (err: any) {
+      console.error('Failed to load affiliation:', err.message);
+    }
+  };
+
+  // Send Request to Supervisor
+  const requestAffiliation = async () => {
+    if (!selectedSupervisorId.value || !authStore.user?.id) return;
+    linkingLoading.value = true;
+    linkFeedback.value = null;
+
+    try {
+      const { error } = await supabase.from('intern_supervisor_links').insert({
+        intern_id: authStore.user.id,
+        supervisor_id: selectedSupervisorId.value,
+        status: 'pending',
+      });
+
+      if (error) throw error;
+      internLinkStatus.value = 'pending';
+      linkFeedback.value = {
+        type: 'success',
+        message: 'Request sent! Waiting for supervisor approval.',
+      };
+    } catch (err: any) {
+      linkFeedback.value = {
+        type: 'error',
+        message: err.message || 'Failed to submit affiliation request.',
+      };
+    } finally {
+      linkingLoading.value = false;
+    }
+  };
+
+  // Clock In / Clock Out Geofenced Action
+  const handleAttendanceAction = async () => {
+    if (!authStore.user?.id || !supervisorSite.value) return;
+
+    try {
+      if (currentStatus.value === 'on_duty') {
+        if (typeof (attendanceStore as any).timeOut === 'function') {
+          await (attendanceStore as any).timeOut();
+        } else if (typeof (attendanceStore as any).clockOut === 'function') {
+          await (attendanceStore as any).clockOut();
+        }
+      } else {
+        const payload = {
+          internId: authStore.user.id,
+          supervisorId: supervisorSite.value.supervisor_id,
+          officeLat: supervisorSite.value.latitude,
+          officeLng: supervisorSite.value.longitude,
+          allowedRadiusMeters: supervisorSite.value.radius_meters,
+        };
+
+        if (typeof (attendanceStore as any).timeIn === 'function') {
+          await (attendanceStore as any).timeIn(payload);
+        } else if (typeof (attendanceStore as any).clockIn === 'function') {
+          await (attendanceStore as any).clockIn(payload);
+        }
+      }
+    } catch (err: any) {
+      if (err.name === 'GeofenceError' || err.details) {
+        geofenceError.value = {
+          isOpen: true,
+          companyName: supervisorSite.value?.company_name || 'Designated Office',
+          formattedDistance: `${Math.round(err.details?.distance || 0)}m`,
+          allowedRadius: supervisorSite.value?.radius_meters || 100,
+        };
       }
     }
-  } catch (err: any) {
-    console.error('Failed to fetch link status:', err.message);
-  } finally {
-    loading.value = false;
-  }
-};
+  };
 
-// Send Smart Link Request
-const submitLinkRequest = async () => {
-  if (!selectedCompanyId.value) {
-    errorMessage.value = 'Please select a company and supervisor from the list.';
-    return;
-  }
+  // Inspect Attached Proof
+  const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: string) => {
+    activeProofUrl.value = url;
+    activeProofType.value = type;
+    activeProofTitle.value = title;
+    isProofViewerOpen.value = true;
+  };
 
-  const selectedSite = availableCompanies.value.find((c) => c.id === selectedCompanyId.value);
-  if (!selectedSite) return;
+  const refreshData = async () => {
+    if (!authStore.user?.id) return;
 
-  isSubmittingRequest.value = true;
-  errorMessage.value = '';
-  alertMessage.value = '';
+    const loadHistory =
+      (attendanceStore as any).fetchAttendanceHistory ||
+      (attendanceStore as any).fetchInternLogs ||
+      (attendanceStore as any).fetchHistory;
 
-  try {
-    const payload = {
-      intern_id: authStore.user!.id,
-      supervisor_id: selectedSite.supervisor_id,
-      status: 'pending',
-      created_at: new Date().toISOString(),
-    };
+    await Promise.all([
+      fetchAffiliation(),
+      attendanceStore.fetchTodayShift(authStore.user.id),
+      typeof loadHistory === 'function' ? loadHistory(authStore.user.id) : Promise.resolve(),
+      accomplishmentsStore.fetchInternLogs(authStore.user.id),
+    ]);
+  };
 
-    const { data, error } = await supabase
-      .from('intern_supervisor_links')
-      .upsert(payload, { onConflict: 'intern_id' })
-      .select()
-      .single();
+  onMounted(async () => {
+    await authStore.fetchProfile();
+    if (!authStore.isAuthenticated || !authStore.isIntern || !authStore.user) {
+      router.push('/auth');
+      return;
+    }
+    await refreshData();
+  });
+  </script>
 
-    if (error) throw error;
+  <template>
+    <main class="trainext-page-shell">
+      <div class="trainext-bg-railway" aria-hidden="true"></div>
+      <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
-    linkRecord.value = data as InternSupervisorLink;
-    alertMessage.value = 'Affiliation request dispatched! Waiting for supervisor approval.';
-  } catch (err: any) {
-    errorMessage.value = err.message || 'Failed to dispatch supervisor affiliation request.';
-  } finally {
-    isSubmittingRequest.value = false;
-  }
-};
-
-// Execute Geofenced Time-In
-const handleTimeIn = async () => {
-  errorMessage.value = '';
-
-  if (!coordinates.value || !assignedCompany.value) {
-    errorMessage.value = 'Waiting for valid device GPS coordinates...';
-    return;
-  }
-
-  evaluateGeofence();
-  if (!geofenceResult.value?.isInside) {
-    isGeofenceErrorOpen.value = true;
-    return;
-  }
-
-  actionLoading.value = true;
-  try {
-    await attendanceStore.logTimeIn({
-      internId: authStore.user!.id,
-      supervisorId: assignedCompany.value.supervisor_id,
-      latitude: coordinates.value.latitude,
-      longitude: coordinates.value.longitude,
-    });
-    alertMessage.value = 'Successfully clocked in! You are currently on duty.';
-  } catch (err: any) {
-    errorMessage.value = err.message || 'Failed to record Time-In.';
-  } finally {
-    actionLoading.value = false;
-  }
-};
-
-// Execute Time-Out
-const handleTimeOut = async () => {
-  actionLoading.value = true;
-  errorMessage.value = '';
-  alertMessage.value = '';
-
-  try {
-    await attendanceStore.logTimeOut();
-    alertMessage.value = 'Successfully clocked out! Your status is now "In Transit" until you reach your home base.';
-  } catch (err: any) {
-    errorMessage.value = err.message || 'Failed to record Time-Out.';
-  } finally {
-    actionLoading.value = false;
-  }
-};
-
-// Execute Safe at Base Check-in
-const handleConfirmSafeAtBase = async () => {
-  actionLoading.value = true;
-  errorMessage.value = '';
-  alertMessage.value = '';
-
-  try {
-    await attendanceStore.confirmSafeAtBase();
-    isSafeAtBaseModalOpen.value = false;
-    alertMessage.value = 'Safe arrival recorded! Transit monitoring for this shift has concluded.';
-  } catch (err: any) {
-    errorMessage.value = err.message || 'Failed to record Safe at Base status.';
-  } finally {
-    actionLoading.value = false;
-  }
-};
-
-// Accomplishment Actions
-const openCreateAccomplishment = () => {
-  editingAccomplishment.value = null;
-  isAccomplishmentModalOpen.value = true;
-};
-
-const openEditAccomplishment = (log: AccomplishmentLog) => {
-  editingAccomplishment.value = log;
-  isAccomplishmentModalOpen.value = true;
-};
-
-const handleDeleteAccomplishment = async (id: string) => {
-  if (!confirm('Are you sure you want to delete this pending accomplishment record?')) return;
-  try {
-    await accomplishmentsStore.deleteLog(id);
-    alertMessage.value = 'Accomplishment record removed successfully.';
-  } catch (err: any) {
-    errorMessage.value = err.message || 'Failed to remove accomplishment.';
-  }
-};
-
-const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: string) => {
-  activeProofUrl.value = url;
-  activeProofType.value = type;
-  activeProofTitle.value = title;
-  isProofViewerOpen.value = true;
-};
-
-onMounted(async () => {
-  await authStore.fetchProfile();
-  if (!authStore.isAuthenticated || !authStore.isIntern || !authStore.user) {
-    router.push('/auth');
-    return;
-  }
-
-  await Promise.all([
-    fetchInternLinkStatus(),
-    fetchAvailableCompanies(),
-    attendanceStore.fetchTodayShift(authStore.user.id),
-    accomplishmentsStore.fetchInternLogs(authStore.user.id),
-  ]);
-});
-</script>
-
-<template>
-  <div class="min-h-screen bg-[#0a0f1d] text-slate-100 p-4 sm:p-8 relative overflow-hidden select-none">
-    <!-- Ambient Neon Cyberpunk Glow Backdrops -->
-    <div class="absolute -top-40 -left-40 w-96 h-96 bg-cyan-500/10 rounded-full blur-[140px] pointer-events-none"></div>
-    <div class="absolute top-1/2 -right-40 w-96 h-96 bg-fuchsia-500/10 rounded-full blur-[140px] pointer-events-none"></div>
-
-    <div class="max-w-5xl mx-auto space-y-6 relative z-10">
-      
-      <!-- Top Dynamic Header Bar -->
-      <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-[#0d1527]/80 border border-cyan-500/25 backdrop-blur-2xl shadow-[0_0_35px_rgba(6,182,212,0.12)]">
-        <div>
-          <div class="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-cyan-500/15 border border-cyan-400/40 text-[10px] font-bold text-cyan-300 uppercase tracking-widest mb-1">
-            <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping"></span>
-            Intern Portal
+      <div class="trainext-container-layout">
+        <!-- HEADER BAR -->
+        <header class="trainext-glass-card trainext-header-bar">
+          <div class="trainext-brand-group">
+            <img src="/assets/trainext-logo.png" alt="TraiNext" class="trainext-logo-mini" />
+            <div>
+              <span class="trainext-badge-role">Trainee Station</span>
+              <h1 class="trainext-heading-name">{{ authStore.user?.full_name || 'Intern Trainee' }}</h1>
+            </div>
           </div>
-          <h1 class="text-xl sm:text-2xl font-black text-white tracking-wide">
-            Welcome, {{ authStore.user?.full_name || 'Trainee' }}
-          </h1>
-          <p class="text-xs text-slate-400">
-            {{ isApproved ? (assignedCompany?.company_name || 'Assigned Company') : 'Account Onboarding & Smart Linking' }}
-          </p>
-        </div>
 
-        <div class="flex items-center gap-3">
           <button 
+            type="button" 
             @click="authStore.signOut(); router.push('/auth');"
-            class="px-4 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition"
+            class="trainext-btn-signout"
           >
-            Sign Out
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            <span>Sign Out</span>
           </button>
-        </div>
-      </header>
+        </header>
 
-      <!-- Loading State -->
-      <div v-if="loading" class="p-12 text-center text-slate-400 text-sm animate-pulse">
-        Synchronizing trainee records, geofence, and accomplishment logs...
-      </div>
-
-      <!-- STATE 1: ONBOARDING / PENDING SUPERVISOR LINK -->
-      <section v-else-if="!isApproved" class="space-y-6">
-        <div v-if="isPending" class="p-6 rounded-3xl bg-amber-950/40 border border-amber-500/40 backdrop-blur-xl space-y-2">
-          <div class="flex items-center gap-2 text-amber-300 font-bold text-sm">
-            <span>⏳</span>
-            <span>Supervisor Approval Pending</span>
-          </div>
-          <p class="text-xs text-slate-300 leading-relaxed">
-            Your request has been routed to your supervisor. Once accepted, your office geofence perimeter coordinates will unlock automatically to permit Time In, Time Out, and Accomplishment submissions.
-          </p>
-        </div>
-
-        <div v-if="isRejected" class="p-6 rounded-3xl bg-red-950/40 border border-red-500/40 backdrop-blur-xl space-y-2">
-          <div class="flex items-center gap-2 text-red-300 font-bold text-sm">
-            <span>✕</span>
-            <span>Affiliation Request Declined</span>
-          </div>
-          <p class="text-xs text-slate-300 leading-relaxed">
-            Your request was declined. <span v-if="linkRecord?.rejection_reason" class="text-red-300">Reason: "{{ linkRecord.rejection_reason }}"</span>. Please select and re-apply below.
-          </p>
-        </div>
-
-        <!-- Smart Link Request Card -->
-        <div class="p-6 sm:p-8 rounded-3xl bg-[#0d1527]/90 border border-cyan-500/30 backdrop-blur-2xl shadow-[0_0_40px_rgba(6,182,212,0.15)] space-y-5">
-          <div>
-            <h2 class="text-lg font-bold text-white tracking-wide">
-              Connect to Company & Supervisor
-            </h2>
-            <p class="text-xs text-slate-400 mt-1 leading-relaxed">
-              Select your assigned host training company below. Your supervisor will approve your account to unlock geofenced attendance logging.
-            </p>
-          </div>
-
-          <div v-if="alertMessage" class="p-3.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-300 font-medium">
-            {{ alertMessage }}
-          </div>
-          <div v-if="errorMessage" class="p-3.5 rounded-xl bg-red-950/60 border border-red-500/40 text-xs text-red-300 font-medium">
-            {{ errorMessage }}
-          </div>
-
-          <div class="space-y-1.5">
-            <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-              Available Training Companies
-            </label>
-            <div v-if="availableCompanies.length === 0" class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400">
-              No registered company sites available yet.
-            </div>
-            <select 
-              v-else 
-              v-model="selectedCompanyId"
-              class="w-full px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-800 text-slate-100 text-sm focus:border-cyan-400 outline-none transition"
-            >
-              <option disabled value="">-- Select Company & Office Location --</option>
-              <option v-for="site in availableCompanies" :key="site.id" :value="site.id">
-                {{ site.company_name }} ({{ site.office_address }})
-              </option>
-            </select>
-          </div>
-
-          <button 
-            @click="submitLinkRequest"
-            :disabled="isSubmittingRequest || !selectedCompanyId"
-            class="w-full py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 hover:from-cyan-400 text-white font-bold text-xs uppercase tracking-wider shadow-lg disabled:opacity-40 transition"
-          >
-            {{ isSubmittingRequest ? 'Submitting Affiliation Request...' : (isPending ? 'Re-Submit Request' : 'Send Request to Supervisor') }}
-          </button>
-        </div>
-      </section>
-
-      <!-- STATE 2: AUTHORIZED INTERN (DTR & ACCOMPLISHMENTS UNLOCKED) -->
-      <section v-else class="space-y-6">
-        
-        <!-- Alerts & Feedbacks -->
-        <div v-if="alertMessage" class="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-300 font-medium flex items-center justify-between">
-          <span>{{ alertMessage }}</span>
-          <button @click="alertMessage = ''" class="text-slate-400 hover:text-white font-bold ml-4">✕</button>
-        </div>
-        <div v-if="errorMessage" class="p-4 rounded-2xl bg-red-950/60 border border-red-500/40 text-xs text-red-300 font-medium flex items-center justify-between">
-          <span>{{ errorMessage }}</span>
-          <button @click="errorMessage = ''" class="text-slate-400 hover:text-white font-bold ml-4">✕</button>
-        </div>
-        <div v-if="geoError" class="p-4 rounded-2xl bg-amber-950/60 border border-amber-500/40 text-xs text-amber-300 font-medium">
-          {{ geoError }}
-        </div>
-
-        <!-- 1. LIVE IN TRANSIT CALLOUT BANNER -->
-        <div 
-          v-if="attendanceStore.isInTransit" 
-          class="p-6 rounded-3xl bg-[#0d1527]/90 border border-amber-500/40 backdrop-blur-2xl shadow-[0_0_40px_rgba(245,158,11,0.2)] flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-        >
-          <div class="space-y-1">
-            <div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold uppercase tracking-wider border border-amber-500/40">
-              <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
-              In Transit Monitoring Active
-            </div>
-            <h3 class="text-lg font-bold text-white">Heading Home or to Dorm?</h3>
-            <p class="text-xs text-slate-300 leading-relaxed max-w-xl">
-              Your shift has ended and transit safety tracking is currently active. Confirm your arrival once at your residence to conclude daily accountability.
-            </p>
-          </div>
-
-          <button 
-            @click="isSafeAtBaseModalOpen = true"
-            :disabled="actionLoading"
-            class="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-600 to-emerald-600 hover:from-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider shadow-[0_0_30px_rgba(16,185,129,0.35)] shrink-0 transition"
-          >
-            I Am Safe at Base 🛡️
-          </button>
-        </div>
-
-        <!-- 2. SAFE AT BASE RECEIPT BANNER -->
-        <div 
-          v-else-if="attendanceStore.isSafeAtBase"
-          class="p-5 rounded-3xl bg-emerald-950/40 border border-emerald-500/40 backdrop-blur-2xl flex items-center justify-between gap-4"
-        >
+        <!-- AFFILIATION BANNER -->
+        <section v-if="internLinkStatus !== 'approved'" class="trainext-glass-card flex flex-col gap-3">
           <div class="flex items-center gap-3">
-            <div class="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center text-emerald-300 text-lg">
-              ✓
-            </div>
+            <svg class="w-6 h-6 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+            </svg>
             <div>
-              <h4 class="text-sm font-bold text-white">Safe at Base Validated</h4>
-              <p class="text-[11px] text-slate-300">
-                Digital arrival receipt logged at {{ new Date(attendanceStore.activeShift?.safe_at_base_time || '').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}. Transit accountability concluded.
-              </p>
+              <h2 class="trainext-title text-base">Host Training Company Status</h2>
+              <p class="trainext-subtitle text-[11px]">Connect with your assigned OJT supervisor to enable geofenced tracking.</p>
             </div>
           </div>
-          <span class="text-[10px] font-mono text-emerald-300 bg-slate-900/80 px-3 py-1.5 rounded-xl border border-slate-800">
-            Receipt #{{ attendanceStore.activeShift?.id.slice(0, 8) }}
-          </span>
-        </div>
 
-        <!-- 3. LIVE SHIFT STATUS RIBBON -->
-        <div class="p-6 rounded-3xl bg-[#0d1527]/85 border border-cyan-500/30 backdrop-blur-2xl shadow-[0_0_35px_rgba(6,182,212,0.12)] space-y-4">
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div v-if="linkFeedback" class="p-2.5 rounded-xl text-xs" :class="linkFeedback.type === 'success' ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-300' : 'bg-red-950/60 border border-red-500/40 text-red-300'">
+            {{ linkFeedback.message }}
+          </div>
+
+          <div v-if="internLinkStatus === 'pending'" class="flex items-center gap-2.5 p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30">
+            <span class="w-2 h-2 rounded-full bg-[#00d9ff] animate-ping"></span>
+            <p class="text-xs text-slate-200">Your request is currently awaiting supervisor verification and geofence activation.</p>
+          </div>
+
+          <div v-else-if="internLinkStatus === 'none'" class="flex flex-col gap-1.5 pt-1">
+            <label class="trainext-label">SELECT SUPERVISOR</label>
+            <div class="flex gap-2">
+              <select v-model="selectedSupervisorId" class="trainext-select-glass flex-1">
+                <option :value="null" disabled>Choose assigned company supervisor...</option>
+                <option 
+                  v-for="sup in availableSupervisors" 
+                  :key="sup.id" 
+                  :value="sup.id"
+                >
+                  {{ sup.full_name }} — {{ sup.company_sites?.[0]?.company_name || 'Direct Supervisor' }}
+                </option>
+              </select>
+              <button 
+                type="button" 
+                @click="requestAffiliation"
+                :disabled="!selectedSupervisorId || linkingLoading"
+                class="trainext-btn-pill-primary px-5 text-xs"
+              >
+                {{ linkingLoading ? 'SENDING...' : 'CONNECT' }}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- METRICS & PROGRESS ROW -->
+        <section class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div class="trainext-glass-card flex flex-col justify-between gap-3">
+            <span class="trainext-label">CUMULATIVE PROGRESS</span>
+            <div class="flex items-baseline gap-2">
+              <span class="text-3xl font-bold tracking-tight text-white">{{ renderedHours.toFixed(1) }}</span>
+              <span class="text-xs font-semibold text-[#858994]">/ {{ requiredHours }} hrs</span>
+            </div>
+            <div class="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+              <div class="h-full rounded-full bg-gradient-to-r from-[#00d9ff] to-[#53d8f8] shadow-[0_0_8px_#00d9ff]" :style="{ width: `${progressPercentage}%` }"></div>
+            </div>
+            <span class="text-[10px] font-semibold text-[#00d9ff]">{{ progressPercentage }}% completed target</span>
+          </div>
+
+          <div class="trainext-glass-card flex flex-col justify-between gap-2">
+            <span class="trainext-label">OFFICE PERIMETER</span>
             <div>
-              <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
-                Daily Shift Controller
-              </span>
-              <h2 class="text-xl font-black text-white mt-0.5">
-                <span v-if="attendanceStore.isOnDuty" class="text-cyan-400">On Duty (Rendering Hours)</span>
-                <span v-else-if="attendanceStore.isInTransit" class="text-amber-400">In Transit (Heading Home)</span>
-                <span v-else-if="attendanceStore.isSafeAtBase" class="text-emerald-400">Safe at Base (Shift Completed)</span>
-                <span v-else class="text-slate-300">Ready to Clock In</span>
-              </h2>
-              <p class="text-xs text-slate-400 mt-1">
-                Assigned Site: {{ assignedCompany?.company_name }} ({{ assignedCompany?.office_address }})
-              </p>
+              <h3 class="text-base font-bold text-white">{{ supervisorSite?.company_name || 'No Site Linked' }}</h3>
+              <p class="text-xs text-[#858994] mt-1">{{ supervisorSite?.office_address || 'Geofence access pending supervisor approval' }}</p>
+            </div>
+            <div v-if="supervisorSite" class="flex items-center gap-1.5 text-[10px] font-semibold text-[#00d9ff] pt-1">
+              <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <circle cx="12" cy="12" r="3" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 2v3m0 14v3m10-10h-3M5 12H2" />
+              </svg>
+              <span>Authorized Radius: {{ supervisorSite.radius_meters }}m</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- MAIN ATTENDANCE & SAFETY ACTION PANEL -->
+        <section class="trainext-glass-card flex flex-col gap-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <span class="trainext-label">CURRENT SHIFT STATUS</span>
+              <div class="mt-1.5">
+                <span 
+                  class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider"
+                  :class="{
+                    'border border-[#00d9ff]/50 bg-[#00d9ff]/10 text-white': currentStatus === 'on_duty',
+                    'border border-amber-500/50 bg-amber-500/10 text-amber-300': currentStatus === 'in_transit',
+                    'border border-emerald-500/50 bg-emerald-500/10 text-emerald-300': currentStatus === 'safe_at_base',
+                    'border border-white/20 bg-white/5 text-[#858994]': !currentStatus
+                  }"
+                >
+                  <span class="w-1.5 h-1.5 rounded-full" :class="{
+                    'bg-[#00d9ff] shadow-[0_0_8px_#00d9ff]': currentStatus === 'on_duty',
+                    'bg-amber-400 shadow-[0_0_8px_#f59e0b]': currentStatus === 'in_transit',
+                    'bg-emerald-400': currentStatus === 'safe_at_base',
+                    'bg-[#858994]': !currentStatus
+                  }"></span>
+                  <span>{{ currentStatusText }}</span>
+                </span>
+              </div>
             </div>
 
-            <!-- Geofence Proximity Badge -->
-            <div class="flex items-center gap-2 p-3 rounded-2xl bg-slate-900/80 border border-slate-800 text-xs">
-              <span 
-                class="w-2.5 h-2.5 rounded-full"
-                :class="geofenceResult?.isInside ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)]' : 'bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.8)]'"
-              ></span>
-              <div class="text-left font-mono">
-                <div class="text-[10px] text-slate-400 font-sans">Office Distance</div>
-                <div :class="geofenceResult?.isInside ? 'text-emerald-300' : 'text-red-300'" class="font-bold">
-                  {{ geofenceResult?.formattedDistance || 'Calculating...' }}
-                </div>
+            <div class="flex gap-2.5">
+              <div v-if="currentShift?.time_in" class="p-2 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
+                <span class="text-[7px] font-bold text-[#858994] tracking-wider uppercase">TIME IN</span>
+                <span class="text-xs font-bold text-white font-mono">{{ new Date(currentShift.time_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+              </div>
+              <div v-if="currentShift?.time_out" class="p-2 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
+                <span class="text-[7px] font-bold text-[#858994] tracking-wider uppercase">TIME OUT</span>
+                <span class="text-xs font-bold text-white font-mono">{{ new Date(currentShift.time_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
               </div>
             </div>
           </div>
 
-          <!-- Time-In & Time-Out Action Controls -->
-          <div class="pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-center gap-3">
+          <div class="flex justify-center pt-2">
             <button 
-              v-if="!attendanceStore.isOnDuty && !attendanceStore.isInTransit && !attendanceStore.isSafeAtBase"
-              @click="handleTimeIn"
-              :disabled="actionLoading || geoLoading"
-              class="w-full sm:flex-1 py-4 rounded-2xl bg-gradient-to-r from-cyan-500 via-blue-600 to-cyan-600 hover:from-cyan-400 text-white font-extrabold text-sm uppercase tracking-wider shadow-[0_0_30px_rgba(6,182,212,0.35)] disabled:opacity-40 transition"
+              type="button"
+              v-if="currentStatus !== 'in_transit' && currentStatus !== 'safe_at_base'"
+              @click="handleAttendanceAction"
+              :disabled="attendanceStore.loading || internLinkStatus !== 'approved'"
+              class="trainext-btn-pill-primary w-[174px] h-[48px]"
             >
-              {{ actionLoading ? 'Verifying Coordinates...' : 'Clock In (Geofenced)' }}
+              {{ attendanceStore.loading ? 'CHECKING GPS...' : (currentStatus === 'on_duty' ? 'CLOCK OUT' : 'CLOCK IN') }}
             </button>
 
             <button 
-              v-if="attendanceStore.isOnDuty"
-              @click="handleTimeOut"
-              :disabled="actionLoading"
-              class="w-full sm:flex-1 py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-rose-600 hover:from-amber-400 text-white font-extrabold text-sm uppercase tracking-wider shadow-[0_0_30px_rgba(245,158,11,0.35)] disabled:opacity-40 transition"
+              type="button"
+              v-if="currentStatus === 'in_transit'"
+              @click="isSafeAtBaseModalOpen = true"
+              class="h-[48px] px-6 rounded-full border border-[#00d9ff]/60 bg-[#00d9ff]/15 shadow-[0_0_15px_rgba(0,217,255,0.25)] text-white font-bold text-xs uppercase tracking-wider flex items-center gap-2 cursor-pointer transition hover:bg-[#00d9ff]/25"
             >
-              {{ actionLoading ? 'Clocking Out...' : 'Clock Out (Start Transit)' }}
-            </button>
-
-            <button 
-              @click="refreshLocation"
-              class="w-full sm:w-auto px-4 py-4 rounded-2xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-300 hover:text-white transition flex items-center justify-center gap-1.5"
-            >
-              <span>🔄</span>
-              <span>Refresh Location</span>
+              <svg class="w-4 h-4 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+              </svg>
+              <span>I AM SAFE AT BASE</span>
             </button>
           </div>
-        </div>
+        </section>
 
-        <!-- 4. SHIFT SUMMARY METRICS -->
-        <div v-if="attendanceStore.activeShift" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div class="p-4 rounded-2xl bg-[#0d1527]/80 border border-slate-800/80 backdrop-blur-xl">
-            <span class="text-[10px] font-bold text-slate-400 uppercase">Shift Date</span>
-            <div class="text-sm font-semibold text-white mt-1">{{ attendanceStore.activeShift.date }}</div>
-          </div>
-          <div class="p-4 rounded-2xl bg-[#0d1527]/80 border border-slate-800/80 backdrop-blur-xl">
-            <span class="text-[10px] font-bold text-slate-400 uppercase">Clock In</span>
-            <div class="text-sm font-semibold text-cyan-300 font-mono mt-1">
-              {{ new Date(attendanceStore.activeShift.time_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
-            </div>
-          </div>
-          <div class="p-4 rounded-2xl bg-[#0d1527]/80 border border-slate-800/80 backdrop-blur-xl">
-            <span class="text-[10px] font-bold text-slate-400 uppercase">Clock Out</span>
-            <div class="text-sm font-semibold text-amber-300 font-mono mt-1">
-              {{ attendanceStore.activeShift.time_out ? new Date(attendanceStore.activeShift.time_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Pending' }}
-            </div>
-          </div>
-          <div class="p-4 rounded-2xl bg-[#0d1527]/80 border border-slate-800/80 backdrop-blur-xl">
-            <span class="text-[10px] font-bold text-slate-400 uppercase">Rendered</span>
-            <div class="text-sm font-bold text-emerald-400 font-mono mt-1">
-              {{ attendanceStore.activeShift.hours_rendered }} hrs
-            </div>
-          </div>
-        </div>
-
-        <!-- 5. ACCOMPLISHMENTS SECTION WITH MULTI-PROOF SUPPORT -->
-        <section class="space-y-4 pt-4">
-          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <!-- ACCOMPLISHMENTS SECTION -->
+        <section class="trainext-glass-card flex flex-col gap-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 class="text-lg font-bold text-white tracking-wide flex items-center gap-2">
-                <span>Accomplishment Logs</span>
-                <span class="px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-mono">
-                  {{ accomplishmentsStore.logs.length }}
-                </span>
-              </h2>
-              <p class="text-xs text-slate-400">
-                Submit and manage task achievements with attached screenshots, documents, and videos
-              </p>
+              <h2 class="trainext-title">Daily Task Accomplishment Reports</h2>
+              <p class="trainext-subtitle text-[11px]">Submit daily tasks and attached verification proofs for supervisor approval.</p>
             </div>
 
             <button 
-              @click="openCreateAccomplishment"
-              class="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 text-white font-bold text-xs uppercase tracking-wider shadow-[0_0_20px_rgba(6,182,212,0.3)] transition flex items-center justify-center gap-2 self-start sm:self-auto"
+              type="button" 
+              @click="isAccomplishmentModalOpen = true"
+              :disabled="internLinkStatus !== 'approved'"
+              class="trainext-btn-pill-primary h-[38px] px-4 text-[11px]"
             >
-              <span>+</span>
-              <span>New Accomplishment</span>
+              + NEW REPORT
             </button>
           </div>
 
-          <!-- Empty State -->
-          <div 
-            v-if="accomplishmentsStore.logs.length === 0" 
-            class="p-10 rounded-3xl bg-[#0d1527]/60 border border-slate-800/80 text-center space-y-2"
-          >
-            <div class="text-3xl">📋</div>
-            <p class="text-sm font-semibold text-slate-300">No accomplishment reports logged yet.</p>
-            <p class="text-xs text-slate-500 max-w-sm mx-auto">
-              Start documenting your daily deliverables, development progress, and tasks for supervisor verification.
-            </p>
+          <div v-if="accomplishmentsStore.logs.length === 0" class="p-8 text-center text-xs text-[#858994]">
+            No task accomplishments recorded yet. Click '+ NEW REPORT' to submit your first daily log.
           </div>
 
-          <!-- Accomplishments List Grid -->
-          <div v-else class="space-y-4">
+          <div v-else class="flex flex-col gap-3">
             <div 
               v-for="log in accomplishmentsStore.logs" 
               :key="log.id"
-              class="p-6 rounded-3xl bg-[#0d1527]/90 border border-slate-800/80 hover:border-cyan-500/30 backdrop-blur-2xl shadow-lg transition space-y-4"
+              class="p-4 rounded-2xl bg-white/[0.02] border border-white/10 flex flex-col gap-2.5"
             >
-              <!-- Card Header -->
-              <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
+              <div class="flex items-start justify-between gap-3">
                 <div>
-                  <div class="flex items-center gap-2 flex-wrap">
-                    <h3 class="text-base font-bold text-white">{{ log.title }}</h3>
-                    <span 
-                      v-if="log.status === 'approved'"
-                      class="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold uppercase tracking-wider"
-                    >
-                      Approved
-                    </span>
-                    <span 
-                      v-else-if="log.status === 'rejected'"
-                      class="px-2.5 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 text-[10px] font-bold uppercase tracking-wider"
-                    >
-                      Needs Revision
-                    </span>
-                    <span 
-                      v-else
-                      class="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold uppercase tracking-wider"
-                    >
-                      Pending Review
-                    </span>
-                  </div>
-                  <div class="flex items-center gap-3 text-[11px] text-slate-400 mt-1">
-                    <span>Date: <strong class="text-slate-300 font-mono">{{ log.report_date }}</strong></span>
+                  <h3 class="text-sm font-bold text-white">{{ log.title }}</h3>
+                  <div class="flex items-center gap-1.5 text-[10.5px] text-[#858994] mt-0.5">
+                    <span class="font-mono">{{ log.report_date }}</span>
                     <span>•</span>
-                    <span>Rendered: <strong class="text-cyan-400 font-mono">{{ log.rendered_hours }} hrs</strong></span>
+                    <span class="text-[#00d9ff] font-semibold">{{ log.rendered_hours }} hrs rendered</span>
                   </div>
                 </div>
 
-                <!-- Action Controls (Only available if still pending) -->
-                <div v-if="log.status === 'pending'" class="flex items-center gap-2">
-                  <button 
-                    @click="openEditAccomplishment(log)"
-                    class="px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition"
-                  >
-                    Edit
-                  </button>
-                  <button 
-                    @click="handleDeleteAccomplishment(log.id)"
-                    class="px-3 py-1.5 rounded-xl bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-xs font-semibold text-red-400 hover:text-red-300 transition"
-                  >
-                    Delete
-                  </button>
-                </div>
+                <span 
+                  class="trainext-chip"
+                  :class="{
+                    'chip-emerald': log.status === 'approved',
+                    'chip-amber': log.status === 'pending',
+                    'chip-rose': log.status === 'rejected'
+                  }"
+                >
+                  {{ log.status }}
+                </span>
               </div>
 
-              <!-- Card Description -->
-              <p class="text-xs text-slate-300 leading-relaxed whitespace-pre-line">
-                {{ log.description }}
-              </p>
+              <p class="text-xs text-slate-300 leading-relaxed">{{ log.description }}</p>
 
-              <!-- Supervisor Feedback Callout (if present) -->
-              <div 
-                v-if="log.feedback" 
-                class="p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs text-slate-300 space-y-1"
-              >
-                <span class="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">Supervisor Feedback</span>
-                <p class="italic text-slate-200">"{{ log.feedback }}"</p>
+              <div v-if="(log as any).feedback" class="p-2.5 rounded-xl bg-red-950/40 border border-red-500/30 text-xs text-red-200">
+                <span class="text-[8px] font-bold uppercase tracking-wider text-red-400 block mb-0.5">SUPERVISOR FEEDBACK:</span>
+                <p>{{ (log as any).feedback }}</p>
               </div>
 
-              <!-- Multi-Proof Attachments Row -->
-              <div class="pt-3 border-t border-slate-800/60 flex flex-wrap items-center gap-3">
-                <!-- Screenshots / Photos -->
-                <div v-if="log.proof_images && log.proof_images.length > 0" class="flex items-center gap-2">
-                  <span class="text-[10px] font-bold uppercase text-slate-500">Images:</span>
-                  <div class="flex items-center gap-1.5">
-                    <button 
-                      v-for="(img, idx) in log.proof_images" 
-                      :key="idx"
-                      @click="inspectMedia(img, 'image', `${log.title} - Screenshot ${idx + 1}`)"
-                      class="w-9 h-9 rounded-xl overflow-hidden border border-cyan-500/30 hover:border-cyan-400 transition transform hover:scale-105 bg-slate-900"
-                    >
-                      <img :src="img" alt="Proof" class="w-full h-full object-cover" />
-                    </button>
-                  </div>
-                </div>
-
-                <!-- Documents -->
-                <div v-if="log.proof_documents && log.proof_documents.length > 0" class="flex items-center gap-2">
-                  <span class="text-[10px] font-bold uppercase text-slate-500">Docs:</span>
-                  <div class="flex items-center gap-1.5">
-                    <button 
-                      v-for="(doc, idx) in log.proof_documents" 
-                      :key="idx"
-                      @click="inspectMedia(doc, 'document', `${log.title} - Document`)"
-                      class="px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-[11px] text-cyan-300 flex items-center gap-1 transition"
-                    >
-                      <span>📄</span>
-                      <span class="truncate max-w-[120px]">{{ doc.split('/').pop() }}</span>
-                    </button>
-                  </div>
-                </div>
-
-                <!-- Video Walkthrough -->
-                <div v-if="log.video_url" class="flex items-center gap-2">
-                  <span class="text-[10px] font-bold uppercase text-slate-500">Video:</span>
+              <div class="flex flex-wrap items-center gap-3 pt-2 border-t border-white/10 text-xs">
+                <div v-if="log.proof_images?.length" class="flex items-center gap-1.5">
+                  <span class="text-[8px] font-bold uppercase text-[#858994]">IMAGES:</span>
                   <button 
-                    @click="inspectMedia(log.video_url, 'video', `${log.title} - Video Walkthrough`)"
-                    class="px-3 py-1 rounded-lg bg-fuchsia-950/40 hover:bg-fuchsia-900/60 border border-fuchsia-500/40 text-[11px] font-semibold text-fuchsia-300 flex items-center gap-1.5 transition"
+                    v-for="img in log.proof_images" 
+                    :key="img"
+                    type="button"
+                    @click="inspectMedia(img, 'image', log.title)"
+                    class="w-8 h-8 rounded-lg overflow-hidden border border-[#00d9ff]/30 bg-black cursor-pointer hover:scale-105 transition"
                   >
-                    <span>▶</span>
-                    <span>Watch Walkthrough</span>
+                    <img :src="img" alt="Proof" class="w-full h-full object-cover" />
+                  </button>
+                </div>
+
+                <div v-if="log.proof_documents?.length" class="flex items-center gap-1.5">
+                  <span class="text-[8px] font-bold uppercase text-[#858994]">DOCS:</span>
+                  <button 
+                    v-for="doc in log.proof_documents" 
+                    :key="doc"
+                    type="button"
+                    @click="inspectMedia(doc, 'document', log.title)"
+                    class="px-2 py-1 rounded-md bg-white/5 border border-white/20 text-[10px] text-[#00d9ff] flex items-center gap-1 cursor-pointer"
+                  >
+                    <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                    <span class="truncate max-w-[90px]">{{ doc.split('/').pop() }}</span>
+                  </button>
+                </div>
+
+                <div v-if="log.video_url" class="flex items-center gap-1.5">
+                  <span class="text-[8px] font-bold uppercase text-[#858994]">VIDEO:</span>
+                  <button 
+                    type="button"
+                    @click="inspectMedia(log.video_url, 'video', log.title)"
+                    class="px-2.5 py-1 rounded-md bg-[#00d9ff]/10 border border-[#00d9ff]/30 text-[10px] text-white flex items-center gap-1 cursor-pointer"
+                  >
+                    <svg class="w-2.5 h-2.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M8 5v14l11-7z"/>
+                    </svg>
+                    <span>Play Demo</span>
                   </button>
                 </div>
               </div>
@@ -684,45 +489,43 @@ onMounted(async () => {
           </div>
         </section>
 
-      </section>
+        <!-- FOOTER -->
+        <footer class="trainext-footer-tagline">
+          <span>Smart Tracking.</span>
+          <span>Real-Time Safety.</span>
+        </footer>
+      </div>
 
-    </div>
+      <!-- MODALS -->
+      <AccomplishmentModal 
+        :is-open="isAccomplishmentModalOpen"
+        :intern-id="authStore.user?.id || ''"
+        @close="isAccomplishmentModalOpen = false"
+        @saved="refreshData"
+      />
 
-    <!-- GEOFENCE ERROR MODAL -->
-    <GeofenceErrorModal 
-      :is-open="isGeofenceErrorOpen"
-      :company-name="assignedCompany?.company_name || 'Designated Office'"
-      :formatted-distance="geofenceResult?.formattedDistance || 'calculating...'"
-      :allowed-radius="assignedCompany?.radius_meters || 150"
-      @close="isGeofenceErrorOpen = false"
-      @retry="refreshLocation(); isGeofenceErrorOpen = false;"
-    />
+      <SafeAtBaseModal 
+        :is-open="isSafeAtBaseModalOpen"
+        :log-id="currentShift?.id || ''"
+        :intern-id="authStore.user?.id || ''"
+        @close="isSafeAtBaseModalOpen = false"
+        @confirmed="refreshData"
+      />
 
-    <!-- SAFE AT BASE CONFIRMATION MODAL -->
-    <SafeAtBaseModal 
-      :is-open="isSafeAtBaseModalOpen"
-      :loading="actionLoading"
-      @close="isSafeAtBaseModalOpen = false"
-      @confirm="handleConfirmSafeAtBase"
-    />
+      <ProofViewerModal 
+        :is-open="isProofViewerOpen"
+        :media-url="activeProofUrl"
+        :media-type="activeProofType"
+        :title="activeProofTitle"
+        @close="isProofViewerOpen = false"
+      />
 
-    <!-- ACCOMPLISHMENT ENTRY MODAL -->
-    <AccomplishmentModal 
-      :is-open="isAccomplishmentModalOpen"
-      :intern-id="authStore.user?.id || ''"
-      :supervisor-id="assignedCompany?.supervisor_id"
-      :initial-data="editingAccomplishment"
-      @close="isAccomplishmentModalOpen = false"
-      @saved="() => { isAccomplishmentModalOpen = false; if (authStore.user?.id) accomplishmentsStore.fetchInternLogs(authStore.user.id); }"
-    />
-
-    <!-- PROOF VIEWER / LIGHTBOX MODAL -->
-    <ProofViewerModal 
-      :is-open="isProofViewerOpen"
-      :media-url="activeProofUrl"
-      :media-type="activeProofType"
-      :title="activeProofTitle"
-      @close="isProofViewerOpen = false"
-    />
-  </div>
-</template>
+      <GeofenceErrorModal 
+        :is-open="geofenceError.isOpen"
+        :company-name="geofenceError.companyName"
+        :formatted-distance="geofenceError.formattedDistance"
+        :allowed-radius="geofenceError.allowedRadius"
+        @close="geofenceError.isOpen = false"
+      />
+    </main>
+  </template>
