@@ -1,129 +1,110 @@
-import { computed, readonly, ref } from 'vue'
-import type { GeoPosition } from '@/types'
-
-const position = ref<GeoPosition | null>(null)
-const error = ref('')
-const isWatching = ref(false)
-const isLoading = ref(false)
-
-let watchId: number | null = null
-let startPromise: Promise<GeoPosition> | null = null
-
-function mapPosition(result: GeolocationPosition): GeoPosition {
-  return {
-    latitude: result.coords.latitude,
-    longitude: result.coords.longitude,
-    accuracy: Number.isFinite(result.coords.accuracy)
-      ? result.coords.accuracy
-      : null,
-    timestamp: result.timestamp
-  }
-}
-
-function handleError(err: GeolocationPositionError): void {
-  if (err.code === err.PERMISSION_DENIED) {
-    error.value =
-      'Location permission was denied. Enable location access to use geofenced attendance.'
-  } else if (err.code === err.POSITION_UNAVAILABLE) {
-    error.value = 'Your current location is unavailable. Move to an open area and retry.'
-  } else if (err.code === err.TIMEOUT) {
-    error.value = 'Getting your location timed out. Retry in a moment.'
-  } else {
-    error.value = err.message || 'Unable to read your location.'
-  }
-}
-
-function startWatch(): void {
-  if (watchId !== null || typeof navigator === 'undefined') {
-    return
-  }
-
-  if (!('geolocation' in navigator)) {
-    error.value = 'Geolocation is not supported by this browser.'
-    return
-  }
-
-  watchId = navigator.geolocation.watchPosition(
-    (result) => {
-      position.value = mapPosition(result)
-      error.value = ''
-    },
-    handleError,
-    {
-      enableHighAccuracy: true,
-      timeout: 15000,
-      maximumAge: 2000
-    }
-  )
-  isWatching.value = true
-}
-
-async function getCurrentPosition(): Promise<GeoPosition> {
-  if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
-    throw new Error('Geolocation is not supported by this browser.')
-  }
-
-  isLoading.value = true
-
-  return new Promise<GeoPosition>((resolve, reject) => {
-    navigator.geolocation.getCurrentPosition(
-      (result) => {
-        const mapped = mapPosition(result)
-        position.value = mapped
-        error.value = ''
-        isLoading.value = false
-        resolve(mapped)
-      },
-      (err) => {
-        handleError(err)
-        isLoading.value = false
-        reject(new Error(error.value))
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0
-      }
-    )
-  })
-}
-
-async function start(): Promise<GeoPosition> {
-  startWatch()
-  if (position.value) {
-    return position.value
-  }
-  if (!startPromise) {
-    startPromise = getCurrentPosition().finally(() => {
-      startPromise = null
-    })
-  }
-  return startPromise
-}
-
-async function refresh(): Promise<GeoPosition> {
-  return getCurrentPosition()
-}
-
-function stop(): void {
-  if (watchId !== null && typeof navigator !== 'undefined') {
-    navigator.geolocation.clearWatch(watchId)
-  }
-  watchId = null
-  isWatching.value = false
-}
+import { ref, onMounted, onUnmounted } from 'vue';
+import type { Coordinates } from '@/lib/geofence';
 
 export function useGeolocation() {
-  const hasPosition = computed(() => position.value !== null)
+  const coordinates = ref<Coordinates | null>(null);
+  const accuracy = ref<number | null>(null);
+  const loading = ref(true);
+  const error = ref<string | null>(null);
+  let watchId: number | null = null;
+
+  const updateCoordinates = (position: GeolocationPosition) => {
+    coordinates.value = {
+      latitude: Number(position.coords.latitude.toFixed(6)),
+      longitude: Number(position.coords.longitude.toFixed(6)),
+    };
+    accuracy.value = Math.round(position.coords.accuracy);
+    loading.value = false;
+    error.value = null;
+  };
+
+  const handleError = (err: GeolocationPositionError) => {
+    loading.value = false;
+    switch (err.code) {
+      case err.PERMISSION_DENIED:
+        error.value = 'Location access was denied. Please allow location permissions in your browser or phone settings.';
+        break;
+      case err.POSITION_UNAVAILABLE:
+        error.value = 'Location data is currently unavailable. Ensure GPS is enabled on your device.';
+        break;
+      case err.TIMEOUT:
+        error.value = 'GPS location request timed out. Please refresh and check your signal.';
+        break;
+      default:
+        error.value = 'An unexpected geolocation error occurred.';
+        break;
+    }
+  };
+
+  const startWatching = () => {
+    if (!navigator.geolocation) {
+      error.value = 'Geolocation is not supported by your current browser or mobile platform.';
+      loading.value = false;
+      return;
+    }
+
+    loading.value = true;
+    error.value = null;
+
+    // Direct fetch first
+    navigator.geolocation.getCurrentPosition(updateCoordinates, handleError, {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0,
+    });
+
+    // Continuous real-time location watching
+    watchId = navigator.geolocation.watchPosition(updateCoordinates, handleError, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 5000,
+    });
+  };
+
+  const stopWatching = () => {
+    if (watchId !== null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchId);
+      watchId = null;
+    }
+  };
+
+  const refreshLocation = async (): Promise<Coordinates | null> => {
+    loading.value = true;
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        error.value = 'Geolocation not supported.';
+        loading.value = false;
+        resolve(null);
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          updateCoordinates(pos);
+          resolve(coordinates.value);
+        },
+        (err) => {
+          handleError(err);
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    });
+  };
+
+  onMounted(() => {
+    startWatching();
+  });
+
+  onUnmounted(() => {
+    stopWatching();
+  });
 
   return {
-    position: readonly(position),
-    error: readonly(error),
-    isWatching: readonly(isWatching),
-    isLoading: readonly(isLoading),
-    hasPosition,
-    start,
-    refresh,
-    stop
-  }
+    coordinates,
+    accuracy,
+    loading,
+    error,
+    refreshLocation,
+  };
 }

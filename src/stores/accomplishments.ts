@@ -1,315 +1,308 @@
-import { computed, ref } from 'vue'
-import { defineStore } from 'pinia'
-import type { RealtimeChannel } from '@supabase/supabase-js'
-import { supabase } from '@/lib/supabase'
-import type {
-  AccomplishmentProof,
-  AccomplishmentReport,
-  ProofKind
-} from '@/types'
-
-const PROOF_BUCKET = 'accomplishment-proofs'
-const MAX_PROOF_BYTES = 50 * 1024 * 1024
-
-export interface NewAccomplishmentReport {
-  report_date: string
-  title: string
-  tasks: string
-  hours_spent: number
-  attendance_log_id?: string | null
-  files?: File[]
-  links?: string[]
-}
-
-function kindForFile(file: File): ProofKind {
-  if (file.type.startsWith('image/')) {
-    return 'image'
-  }
-  if (file.type.startsWith('video/')) {
-    return 'video'
-  }
-  return 'document'
-}
-
-function kindForLink(url: string): ProofKind {
-  const lower = url.toLowerCase()
-  if (/\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/.test(lower)) {
-    return 'image'
-  }
-  if (
-    /\.(mp4|webm|mov|avi|mkv)(\?.*)?$/.test(lower) ||
-    /youtube\.com|youtu\.be|vimeo\.com/.test(lower)
-  ) {
-    return 'video'
-  }
-  return 'document'
-}
-
-function extensionFor(file: File): string {
-  const fromName = file.name.split('.').pop()
-  if (fromName && fromName.length <= 8) {
-    return fromName.toLowerCase()
-  }
-  if (file.type === 'application/pdf') {
-    return 'pdf'
-  }
-  return 'bin'
-}
-
-function normalizeLink(raw: string): string {
-  const trimmed = raw.trim()
-  if (!trimmed) {
-    return ''
-  }
-  const withProtocol = /^https?:\/\//i.test(trimmed)
-    ? trimmed
-    : `https://${trimmed}`
-  const parsed = new URL(withProtocol)
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error('Proof links must use http or https.')
-  }
-  return parsed.toString()
-}
+import { defineStore } from 'pinia';
+import { ref } from 'vue';
+import { supabase } from '@/lib/supabase';
+import type { AccomplishmentLog } from '@/types';
 
 export const useAccomplishmentsStore = defineStore('accomplishments', () => {
-  const reports = ref<AccomplishmentReport[]>([])
-  const loading = ref(false)
-  const error = ref('')
+  const logs = ref<AccomplishmentLog[]>([]);
+  const supervisorPendingLogs = ref<any[]>([]);
+  const loading = ref(false);
+  const errorMessage = ref<string | null>(null);
 
-  let channel: RealtimeChannel | null = null
+  const BUCKET_NAME = 'accomplishment-proofs';
 
-  const approvedCount = computed(
-    () => reports.value.filter((report) => report.status === 'approved').length
-  )
-  const pendingCount = computed(
-    () => reports.value.filter((report) => report.status === 'pending').length
-  )
-  const proofCount = computed(() =>
-    reports.value.reduce((total, report) => total + (report.proofs?.length ?? 0), 0)
-  )
+  /**
+   * 1. Upload File to Supabase Storage Bucket ('accomplishment-proofs')
+   */
+  const uploadProofFile = async (file: File, folder: 'images' | 'documents' | 'videos'): Promise<string> => {
+    const fileExt = file.name.split('.').pop();
+    const cleanFileName = file.name.replace(/[^a-zA-Z0-9]/g, '_');
+    const filePath = `${folder}/${Date.now()}_${cleanFileName}.${fileExt}`;
 
-  async function fetchReports(internId: string): Promise<AccomplishmentReport[]> {
-    loading.value = true
-    error.value = ''
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET_NAME)
+      .upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      throw new Error(`Upload failed for ${file.name}: ${uploadError.message}`);
+    }
+
+    const { data } = supabase.storage
+      .from(BUCKET_NAME)
+      .getPublicUrl(filePath);
+
+    return data.publicUrl;
+  };
+
+  /**
+   * 2. Fetch Accomplishment Logs for an Intern
+   */
+  const fetchInternLogs = async (internId: string) => {
+    loading.value = true;
+    errorMessage.value = null;
 
     try {
-      const { data, error: fetchError } = await supabase
-        .from('accomplishment_reports')
-        .select('*, proofs:accomplishment_proofs(*)')
+      const { data, error } = await supabase
+        .from('accomplishment_logs')
+        .select('*')
         .eq('intern_id', internId)
-        .order('report_date', { ascending: false })
-        .order('created_at', { ascending: false })
+        .order('report_date', { ascending: false });
 
-      if (fetchError) {
-        throw fetchError
-      }
-
-      reports.value = (data ?? []) as AccomplishmentReport[]
-      return reports.value
-    } catch (err) {
-      error.value =
-        err instanceof Error ? err.message : 'Unable to load accomplishment reports.'
-      throw err
+      if (error) throw error;
+      logs.value = (data as AccomplishmentLog[]) || [];
+      return logs.value;
+    } catch (err: any) {
+      console.error('Error fetching accomplishments:', err.message);
+      errorMessage.value = err.message;
+      return [];
     } finally {
-      loading.value = false
+      loading.value = false;
     }
-  }
+  };
 
-  async function uploadProofs(
-    internId: string,
-    reportId: string,
-    files: File[],
-    links: string[]
-  ): Promise<AccomplishmentProof[]> {
-    const rows: Array<Omit<AccomplishmentProof, 'id' | 'created_at'>> = []
-
-    for (const file of files) {
-      if (file.size > MAX_PROOF_BYTES) {
-        throw new Error(`${file.name} exceeds the 50 MB proof limit.`)
-      }
-      const ext = extensionFor(file)
-      const path = `${internId}/${reportId}/${crypto.randomUUID()}.${ext}`
-      const { error: uploadError } = await supabase.storage
-        .from(PROOF_BUCKET)
-        .upload(path, file, {
-          contentType: file.type || 'application/octet-stream',
-          upsert: false
-        })
-      if (uploadError) {
-        throw uploadError
-      }
-      rows.push({
-        report_id: reportId,
-        intern_id: internId,
-        kind: kindForFile(file),
-        storage_path: path,
-        external_url: null,
-        file_name: file.name,
-        mime_type: file.type || null
-      })
-    }
-
-    for (const raw of links) {
-      const url = normalizeLink(raw)
-      if (!url) {
-        continue
-      }
-      rows.push({
-        report_id: reportId,
-        intern_id: internId,
-        kind: kindForLink(url),
-        storage_path: null,
-        external_url: url,
-        file_name: url,
-        mime_type: null
-      })
-    }
-
-    if (!rows.length) {
-      return []
-    }
-
-    const { data, error: proofError } = await supabase
-      .from('accomplishment_proofs')
-      .insert(rows)
-      .select()
-
-    if (proofError) {
-      throw proofError
-    }
-
-    return (data ?? []) as AccomplishmentProof[]
-  }
-
-  async function submitReport(
-    internId: string,
-    input: NewAccomplishmentReport
-  ): Promise<AccomplishmentReport> {
-    loading.value = true
-    error.value = ''
+  /**
+   * 3. Submit New Accomplishment Log
+   */
+  const createLog = async (payload: {
+    internId: string;
+    supervisorId?: string;
+    title: string;
+    description: string;
+    reportDate: string;
+    renderedHours: number;
+    proofImages: string[];
+    proofDocuments: string[];
+    videoUrl?: string | null;
+  }) => {
+    loading.value = true;
+    errorMessage.value = null;
 
     try {
-      const { data, error: submitError } = await supabase
-        .from('accomplishment_reports')
-        .insert({
-          intern_id: internId,
-          report_date: input.report_date,
-          title: input.title.trim(),
-          tasks: input.tasks.trim(),
-          hours_spent: input.hours_spent,
-          attendance_log_id: input.attendance_log_id ?? null
-        })
+      const insertData = {
+        intern_id: payload.internId,
+        supervisor_id: payload.supervisorId || null,
+        title: payload.title.trim(),
+        description: payload.description.trim(),
+        report_date: payload.reportDate,
+        rendered_hours: payload.renderedHours,
+        proof_images: payload.proofImages,
+        proof_documents: payload.proofDocuments,
+        video_url: payload.videoUrl ? payload.videoUrl.trim() : null,
+        status: 'pending',
+      };
+
+      const { data, error } = await supabase
+        .from('accomplishment_logs')
+        .insert(insertData)
         .select()
-        .single()
+        .single();
 
-      if (submitError) {
-        throw submitError
-      }
+      if (error) throw error;
 
-      const created = data as AccomplishmentReport
-      created.proofs = await uploadProofs(
-        internId,
-        created.id,
-        input.files ?? [],
-        input.links ?? []
-      )
-      reports.value = [created, ...reports.value]
-      return created
-    } catch (err) {
-      error.value =
-        err instanceof Error ? err.message : 'Unable to submit accomplishment report.'
-      throw err
+      logs.value.unshift(data as AccomplishmentLog);
+      return data as AccomplishmentLog;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to submit accomplishment log.';
+      throw err;
     } finally {
-      loading.value = false
+      loading.value = false;
     }
-  }
+  };
 
-  async function deleteReport(id: string): Promise<void> {
-    error.value = ''
-    const report = reports.value.find((item) => item.id === id)
-    const paths =
-      report?.proofs
-        ?.map((proof) => proof.storage_path)
-        .filter((path): path is string => Boolean(path)) ?? []
+  /**
+   * 4. Update an Existing Pending Accomplishment Log
+   */
+  const updateLog = async (
+    id: string,
+    updates: Partial<{
+      title: string;
+      description: string;
+      report_date: string;
+      rendered_hours: number;
+      proof_images: string[];
+      proof_documents: string[];
+      video_url: string | null;
+    }>
+  ) => {
+    loading.value = true;
+    errorMessage.value = null;
 
-    if (paths.length) {
-      await supabase.storage.from(PROOF_BUCKET).remove(paths)
+    try {
+      const { data, error } = await supabase
+        .from('accomplishment_logs')
+        .update(updates)
+        .eq('id', id)
+        .eq('status', 'pending')
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      const idx = logs.value.findIndex((l) => l.id === id);
+      if (idx !== -1) {
+        logs.value[idx] = data as AccomplishmentLog;
+      }
+      return data as AccomplishmentLog;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to update accomplishment log.';
+      throw err;
+    } finally {
+      loading.value = false;
     }
+  };
 
-    const { error: deleteError } = await supabase
-      .from('accomplishment_reports')
-      .delete()
-      .eq('id', id)
+  /**
+   * 5. Delete a Pending Accomplishment Log
+   */
+  const deleteLog = async (id: string) => {
+    loading.value = true;
+    errorMessage.value = null;
 
-    if (deleteError) {
-      error.value = deleteError.message
-      throw deleteError
+    try {
+      const { error } = await supabase
+        .from('accomplishment_logs')
+        .delete()
+        .eq('id', id)
+        .eq('status', 'pending');
+
+      if (error) throw error;
+
+      logs.value = logs.value.filter((l) => l.id !== id);
+      return true;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to delete accomplishment log.';
+      throw err;
+    } finally {
+      loading.value = false;
     }
+  };
 
-    reports.value = reports.value.filter((item) => item.id !== id)
-  }
+  /**
+   * 6. Fetch Logs Assigned to Supervisor
+   */
+  const fetchSupervisorLogs = async (supervisorId: string) => {
+    loading.value = true;
+    errorMessage.value = null;
 
-  async function proofUrl(proof: AccomplishmentProof): Promise<string | null> {
-    if (proof.external_url) {
-      return proof.external_url
-    }
-    if (!proof.storage_path) {
-      return null
-    }
-    const { data, error: signError } = await supabase.storage
-      .from(PROOF_BUCKET)
-      .createSignedUrl(proof.storage_path, 3600)
-    if (signError) {
-      throw signError
-    }
-    return data.signedUrl
-  }
+    try {
+      const { data, error } = await supabase
+        .from('accomplishment_logs')
+        .select(`
+          *,
+          intern:profiles!accomplishment_logs_intern_id_fkey (
+            id,
+            full_name,
+            contact_number
+          )
+        `)
+        .eq('supervisor_id', supervisorId)
+        .order('created_at', { ascending: false });
 
-  function subscribe(internId: string): void {
-    unsubscribe()
-    channel = supabase
-      .channel(`reports-${internId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'accomplishment_reports',
-          filter: `intern_id=eq.${internId}`
-        },
-        () => {
-          void fetchReports(internId)
+      if (error) throw error;
+      supervisorPendingLogs.value = (data as any[]) || [];
+      return supervisorPendingLogs.value;
+    } catch (err: any) {
+      console.error('Error fetching supervisor logs:', err.message);
+      errorMessage.value = err.message;
+      return [];
+    } finally {
+      loading.value = false;
+    }
+  };
+
+  /**
+   * 7. Single Review (Approve or Reject with Feedback)
+   */
+  const reviewLog = async (params: {
+    logId: string;
+    status: 'approved' | 'rejected';
+    feedback?: string;
+  }) => {
+    loading.value = true;
+    errorMessage.value = null;
+
+    try {
+      const payload: any = {
+        status: params.status,
+        feedback: params.feedback?.trim() || null,
+        approved_at: params.status === 'approved' ? new Date().toISOString() : null,
+      };
+
+      const { data, error } = await supabase
+        .from('accomplishment_logs')
+        .update(payload)
+        .eq('id', params.logId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      const idx = supervisorPendingLogs.value.findIndex((l) => l.id === params.logId);
+      if (idx !== -1) {
+        supervisorPendingLogs.value[idx] = {
+          ...supervisorPendingLogs.value[idx],
+          ...data,
+        };
+      }
+      return data;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to submit review.';
+      throw err;
+    } finally {
+      loading.value = false;
+    }
+  };
+
+  /**
+   * 8. Batch Approve Accomplishments
+   */
+  const batchApproveLogs = async (logIds: string[]) => {
+    if (!logIds.length) return;
+    loading.value = true;
+    errorMessage.value = null;
+
+    try {
+      const nowIso = new Date().toISOString();
+      const { error } = await supabase
+        .from('accomplishment_logs')
+        .update({
+          status: 'approved',
+          approved_at: nowIso,
+        })
+        .in('id', logIds);
+
+      if (error) throw error;
+
+      supervisorPendingLogs.value = supervisorPendingLogs.value.map((log) => {
+        if (logIds.includes(log.id)) {
+          return { ...log, status: 'approved', approved_at: nowIso };
         }
-      )
-      .subscribe()
-  }
-
-  function unsubscribe(): void {
-    if (channel) {
-      void supabase.removeChannel(channel)
-      channel = null
+        return log;
+      });
+      return true;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to batch approve logs.';
+      throw err;
+    } finally {
+      loading.value = false;
     }
-  }
-
-  function clear(): void {
-    unsubscribe()
-    reports.value = []
-    error.value = ''
-  }
+  };
 
   return {
-    reports,
+    logs,
+    supervisorPendingLogs,
     loading,
-    error,
-    approvedCount,
-    pendingCount,
-    proofCount,
-    fetchReports,
-    submitReport,
-    deleteReport,
-    proofUrl,
-    subscribe,
-    unsubscribe,
-    clear
-  }
-})
+    errorMessage,
+    uploadProofFile,
+    fetchInternLogs,
+    createLog,
+    updateLog,
+    deleteLog,
+    fetchSupervisorLogs,
+    reviewLog,
+    batchApproveLogs,
+  };
+});

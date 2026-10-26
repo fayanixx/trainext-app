@@ -1,812 +1,427 @@
-<template>
-  <ion-page>
-    <AppHeader subtitle="Coordinator dashboard" />
-
-    <ion-content :fullscreen="true" class="dashboard-content" style="--background: transparent">
-      <!-- Fixed Background Layer (Subway platform na may dark vignette) -->
-      <div class="fixed inset-0 bg-[#020611] -z-10 overflow-hidden flex items-center justify-center pointer-events-none select-none">
-        <img
-          src="/assets/bg-placeholder.png"
-          alt="Platform Background"
-          class="w-full h-full object-cover object-center brightness-[0.70] contrast-[1.15]"
-        />
-        <div class="absolute inset-0 bg-gradient-to-b from-[#020611]/60 via-[#020611]/30 to-[#020611]/90"></div>
-        <div class="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(0,194,255,0.12)_0%,transparent_60%)]"></div>
-      </div>
-
-      <!-- Pull to Refresh -->
-      <ion-refresher slot="fixed" @ionRefresh="handleRefresh">
-        <ion-refresher-content />
-      </ion-refresher>
-
-      <!-- Main Responsive Container -->
-      <div class="mx-auto max-w-6xl space-y-6 px-3.5 sm:px-6 py-6 font-aileron selection:bg-[#00C2FF] selection:text-black">
-        
-        <!-- Custom Cyber Segment Tabs -->
-        <div class="trainext-glass-card p-1.5 flex items-center gap-1.5">
-          <button
-            type="button"
-            class="tab-nav-btn"
-            :class="activeTab === 'transit' ? 'tab-nav-btn-active' : ''"
-            @click="activeTab = 'transit'"
-          >
-            <svg class="w-4 h-4 mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
-            Live Transit
-          </button>
-
-          <button
-            type="button"
-            class="tab-nav-btn"
-            :class="activeTab === 'enrollment' ? 'tab-nav-btn-active' : ''"
-            @click="activeTab = 'enrollment'"
-          >
-            <svg class="w-4 h-4 mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-            </svg>
-            Enrollment
-            <span v-if="coordinator.pendingEnrollmentCount" class="badge-counter ml-2">
-              {{ coordinator.pendingEnrollmentCount }}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            class="tab-nav-btn"
-            :class="activeTab === 'exports' ? 'tab-nav-btn-active' : ''"
-            @click="activeTab = 'exports'"
-          >
-            <svg class="w-4 h-4 mr-2 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            CSV Exports
-          </button>
-        </div>
-
-        <!-- ======================= TAB 1: LIVE TRANSIT ======================= -->
-        <template v-if="activeTab === 'transit'">
-          <!-- 4-Stat Overview Grid -->
-          <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div class="stat-tile">
-              <p class="stat-label">Safe at Base</p>
-              <p class="stat-value text-emerald-400">{{ coordinator.safeCount }}</p>
-            </div>
-            <div class="stat-tile">
-              <p class="stat-label">In Transit</p>
-              <p class="stat-value text-[#00C2FF]">{{ coordinator.inTransitCount }}</p>
-            </div>
-            <div class="stat-tile">
-              <p class="stat-label">Delayed</p>
-              <p class="stat-value text-rose-400">{{ coordinator.delayedCount }}</p>
-            </div>
-            <div class="stat-tile">
-              <p class="stat-label">Enrollment Checks</p>
-              <p class="stat-value text-amber-400">{{ coordinator.pendingEnrollmentCount }}</p>
-            </div>
-          </div>
-
-          <!-- Live Feed Container -->
-          <div class="trainext-glass-card">
-            <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
-              <div class="flex items-center gap-3">
-                <div class="p-2.5 rounded-2xl bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/20">
-                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 class="card-title text-white">Live Intern Transit Feed</h3>
-                  <p class="card-subtitle text-slate-400">
-                    Safe, in-transit, and delayed status from clock-outs and safe-at-base receipts
-                  </p>
-                </div>
-              </div>
-              <div class="badge-pill badge-pill-success flex items-center gap-1.5">
-                <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                <span>LIVE RADAR</span>
-              </div>
-            </div>
-
-            <p v-if="!coordinator.linkedInterns.length" class="text-center py-8 text-xs text-slate-400 font-regular">
-              No interns have linked your coordinator account yet.
-            </p>
-            <p v-else-if="!feedRows.length" class="text-center py-8 text-xs text-slate-400 font-regular">
-              No linked interns to monitor.
-            </p>
-
-            <!-- Dynamic Feed Rows -->
-            <div v-else class="space-y-3.5">
-              <div
-                v-for="row in feedRows"
-                :key="row.intern.intern_id"
-                class="history-row"
-              >
-                <!-- Top Row: Intern Info & Status Badge -->
-                <div class="flex flex-wrap items-start justify-between gap-2.5 mb-2.5">
-                  <div>
-                    <h4 class="text-sm font-heavy text-white flex items-center gap-2">
-                      {{ row.intern.full_name }}
-                    </h4>
-                    <p class="text-xs text-slate-300 mt-0.5 font-regular">
-                      {{ row.intern.email }} · <span class="text-[#00C2FF] font-semibold">{{ row.intern.university_name || 'University not set' }}</span>
-                    </p>
-                    <p class="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1.5">
-                      <svg class="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                      </svg>
-                      Base: {{ row.intern.home_base_address || 'Not set' }}
-                    </p>
-                  </div>
-                  <div class="badge-pill" :class="stateBadgeClass(row.state)">
-                    <span class="w-1.5 h-1.5 rounded-full mr-1.5" :class="stateDotClass(row.state)"></span>
-                    {{ stateLabel(row.state) }}
-                  </div>
-                </div>
-
-                <!-- Middle Grid: Telemetry Details -->
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs p-3 rounded-2xl bg-white/[0.02] border border-white/10">
-                  <p v-if="row.checkin" class="text-slate-200">
-                    <strong class="text-[#00C2FF]">Safe receipt:</strong> {{ row.checkin.receipt_code }} · {{ formatDateTime(row.checkin.checkin_at) }}
-                  </p>
-                  <p v-if="row.openLog" class="text-slate-200">
-                    <strong class="text-emerald-400">Clocked in:</strong> {{ formatDateTime(row.openLog.clock_in_at) }}
-                  </p>
-                  <p v-else-if="row.lastLog?.clock_out_at" class="text-slate-200">
-                    <strong class="text-slate-400">Last clock-out:</strong> {{ formatDateTime(row.lastLog.clock_out_at) }}
-                  </p>
-                  <p v-else class="text-slate-400 italic">
-                    <strong>Attendance:</strong> No activity logged today
-                  </p>
-                  <p v-if="row.lastPing" class="text-slate-300">
-                    <strong class="text-amber-400">Last ping:</strong> {{ formatDateTime(row.lastPing.created_at) }}
-                  </p>
-                </div>
-
-                <!-- Bottom Actions -->
-                <div class="mt-3.5 flex flex-wrap items-center gap-2.5">
-                  <button
-                    type="button"
-                    class="pill-btn-sm flex items-center gap-1.5"
-                    :disabled="pingingId === row.intern.intern_id"
-                    @click="confirmPing(row)"
-                  >
-                    <ion-spinner v-if="pingingId === row.intern.intern_id" name="crescent" class="w-3.5 h-3.5 text-[#00C2FF]" />
-                    <svg v-else class="w-3.5 h-3.5 text-[#00C2FF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                    </svg>
-                    Ping intern
-                  </button>
-                  <span v-if="row.state === 'delayed'" class="badge-pill badge-pill-danger text-[10px]">
-                    ⚠️ Check-in Overdue
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </template>
-
-        <!-- ======================= TAB 2: ENROLLMENT ======================= -->
-        <template v-if="activeTab === 'enrollment'">
-          <div class="trainext-glass-card">
-            <div class="flex items-center gap-3">
-              <div class="p-2.5 rounded-2xl bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/20">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <div>
-                <h3 class="card-title text-white">School Enrollment Verification</h3>
-                <p class="card-subtitle text-slate-400">
-                  Confirm each intern's academic enrollment credentials. Intern unlocks geofenced OJT controls once approved.
-                </p>
-              </div>
-            </div>
-
-            <p v-if="!coordinator.linkedInterns.length" class="text-center py-8 text-xs text-slate-400 font-regular">
-              No interns have linked your coordinator account yet.
-            </p>
-          </div>
-
-          <!-- Responsive Enrollment Cards Grid -->
-          <div class="grid gap-4 md:grid-cols-2">
-            <EnrollmentCard
-              v-for="intern in coordinator.linkedInterns"
-              :key="intern.intern_id"
-              :intern="intern"
-              @reviewed="showToast"
-            />
-          </div>
-        </template>
-
-        <!-- ======================= TAB 3: CSV EXPORTS ======================= -->
-        <template v-if="activeTab === 'exports'">
-          <div class="trainext-glass-card">
-            <div class="flex items-center gap-3 mb-5">
-              <div class="p-2.5 rounded-2xl bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/20">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                </svg>
-              </div>
-              <div>
-                <h3 class="card-title text-white">Download CSV Reports</h3>
-                <p class="card-subtitle text-slate-400">
-                  Export verified accomplishment summaries and safe-at-base records for institutional compliance.
-                </p>
-              </div>
-            </div>
-
-            <!-- Export Cards Grid -->
-            <div class="grid gap-4 sm:grid-cols-2">
-              <!-- Accomplishments Export Card -->
-              <div class="history-row flex flex-col justify-between">
-                <div>
-                  <div class="flex items-center gap-2.5 mb-2">
-                    <div class="p-2 rounded-xl bg-[#00C2FF]/10 text-[#00C2FF]">
-                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                    </div>
-                    <h4 class="text-sm font-heavy text-white">Accomplishment Records</h4>
-                  </div>
-                  <p class="text-xs text-slate-400 leading-relaxed font-regular">
-                    Dates, rendered tasks, hours spent, supervisor approval status, feedback, and cloud proof attachments.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  class="pill-btn-outline w-full flex items-center justify-center gap-2 mt-4"
-                  :disabled="exporting === 'reports' || !coordinator.linkedInterns.length"
-                  @click="exportAccomplishments"
-                >
-                  <ion-spinner v-if="exporting === 'reports'" name="crescent" class="w-4 h-4 text-[#00C2FF]" />
-                  <svg v-else class="w-4 h-4 text-[#00C2FF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Export Accomplishments CSV
-                </button>
-              </div>
-
-              <!-- Safety Logs Export Card -->
-              <div class="history-row flex flex-col justify-between">
-                <div>
-                  <div class="flex items-center gap-2.5 mb-2">
-                    <div class="p-2 rounded-xl bg-emerald-500/10 text-emerald-400">
-                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                      </svg>
-                    </div>
-                    <h4 class="text-sm font-heavy text-white">Safety & Transit Logs</h4>
-                  </div>
-                  <p class="text-xs text-slate-400 leading-relaxed font-regular">
-                    Safe-at-base timestamps, encrypted receipt codes, residence coordinates, and geofence audits.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  class="pill-btn-outline w-full flex items-center justify-center gap-2 mt-4"
-                  :disabled="exporting === 'safety' || !coordinator.linkedInterns.length"
-                  @click="exportSafety"
-                >
-                  <ion-spinner v-if="exporting === 'safety'" name="crescent" class="w-4 h-4 text-[#00C2FF]" />
-                  <svg v-else class="w-4 h-4 text-[#00C2FF]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Export Safety Logs CSV
-                </button>
-              </div>
-            </div>
-
-            <!-- Feedback Message -->
-            <p v-if="exportMessage" class="mt-4 text-xs font-semibold text-[#00C2FF] flex items-center gap-2">
-              <span>✓</span> {{ exportMessage }}
-            </p>
-          </div>
-        </template>
-      </div>
-
-      <!-- Toast Feedback -->
-      <ion-toast
-        :is-open="toast.open"
-        :message="toast.message"
-        :color="toast.color"
-        :duration="4500"
-        @ionDidDismiss="toast.open = false"
-      />
-    </ion-content>
-  </ion-page>
-</template>
-
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import {
-  IonContent,
-  IonPage,
-  IonRefresher,
-  IonRefresherContent,
-  IonSpinner,
-  IonToast,
-  alertController
-} from '@ionic/vue'
-import AppHeader from '@/components/AppHeader.vue'
-import EnrollmentCard from '@/components/EnrollmentCard.vue'
-import { useAuthStore } from '@/stores/auth'
-import { useCoordinatorStore } from '@/stores/coordinator'
-import { useSafetyStore } from '@/stores/safety'
-import { sendTransitPingNotification } from '@/lib/email'
-import { csvFilename, downloadCsv } from '@/lib/csv'
-import type { TransitFeedRow, TransitState } from '@/types'
+import { ref, onMounted, computed } from 'vue';
+import { useRouter } from 'vue-router';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/stores/auth';
+import type { AttendanceLog } from '@/types';
+import { exportToCsv, printSummaryReport, type TraineeExportRow } from '@/lib/exportUtils';
 
-type TabName = 'transit' | 'enrollment' | 'exports'
+const router = useRouter();
+const authStore = useAuthStore();
 
-const auth = useAuthStore()
-const coordinator = useCoordinatorStore()
-const safety = useSafetyStore()
+// Dashboard State
+const loading = ref(true);
+const internsMasterList = ref<any[]>([]);
+const todayAttendanceLogs = ref<AttendanceLog[]>([]);
+const pingSuccessMessage = ref('');
+const pingErrorMessage = ref('');
+const isPinging = ref<string | null>(null);
 
-const activeTab = ref<TabName>('transit')
-const pingingId = ref('')
-const exporting = ref('')
-const exportMessage = ref('')
-const toast = reactive({
-  open: false,
-  message: '',
-  color: 'success'
-})
+// Real-Time Safety Metrics Counters
+const inTransitCount = computed(() => {
+  return todayAttendanceLogs.value.filter((log) => log.status === 'in_transit').length;
+});
 
-let refreshTimer: number | null = null
+const safeAtBaseCount = computed(() => {
+  return todayAttendanceLogs.value.filter((log) => log.status === 'safe_at_base').length;
+});
 
-const feedRows = computed(() =>
-  [...coordinator.feed].sort((a, b) => {
-    const rank: Record<TransitState, number> = {
-      delayed: 0,
-      in_transit: 1,
-      safe: 2
-    }
-    const byState = rank[a.state] - rank[b.state]
-    if (byState !== 0) {
-      return byState
-    }
-    return a.intern.full_name.localeCompare(b.intern.full_name)
-  })
-)
+const onDutyCount = computed(() => {
+  return todayAttendanceLogs.value.filter((log) => log.status === 'on_duty').length;
+});
 
-function stateLabel(state: TransitState): string {
-  if (state === 'safe') {
-    return 'Safe at base'
-  }
-  if (state === 'in_transit') {
-    return 'In transit'
-  }
-  return 'Delayed'
-}
-
-function stateBadgeClass(state: TransitState): string {
-  if (state === 'safe') return 'badge-pill-success'
-  if (state === 'in_transit') return 'badge-pill-cyan'
-  return 'badge-pill-danger'
-}
-
-function stateDotClass(state: TransitState): string {
-  if (state === 'safe') return 'bg-emerald-400'
-  if (state === 'in_transit') return 'bg-[#00C2FF] animate-pulse'
-  return 'bg-rose-400 animate-pulse'
-}
-
-function formatDateTime(value: string): string {
-  return new Date(value).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}
-
-function showToast(message: string, color = 'success'): void {
-  toast.message = message
-  toast.color = color
-  toast.open = true
-}
-
-async function loadData(): Promise<void> {
-  await coordinator.fetchDashboard()
-}
-
-async function handleRefresh(event: CustomEvent): Promise<void> {
+// Fetch All Registered Batch Interns with Affiliation & Rendered Hours
+const fetchCoordinatorData = async () => {
+  loading.value = true;
   try {
-    await loadData()
+    const today = new Date().toISOString().split('T')[0];
+
+    // 1. Fetch Today's Attendance Logs for Live Safety Feed
+    const { data: attendanceData, error: attendanceError } = await supabase
+      .from('attendance_logs')
+      .select(`
+        id,
+        intern_id,
+        date,
+        time_in,
+        time_out,
+        hours_rendered,
+        status,
+        safe_at_base_time,
+        intern:profiles!attendance_logs_intern_id_fkey (
+          id,
+          full_name,
+          contact_number,
+          emergency_contact_name,
+          emergency_contact_number
+        )
+      `)
+      .eq('date', today);
+
+    if (attendanceError) throw attendanceError;
+    todayAttendanceLogs.value = (attendanceData as any[]) || [];
+
+    // 2. Fetch Master List of All Interns under Batch
+    const { data: internsData, error: internsError } = await supabase
+      .from('profiles')
+      .select(`
+        id,
+        full_name,
+        contact_number,
+        emergency_contact_name,
+        emergency_contact_number,
+        created_at,
+        intern_supervisor_links (
+          status,
+          supervisor_id,
+          supervisor:profiles!intern_supervisor_links_supervisor_id_fkey (
+            full_name,
+            company_sites (
+              company_name
+            )
+          )
+        ),
+        attendance_logs (
+          hours_rendered
+        )
+      `)
+      .eq('role', 'intern')
+      .order('full_name', { ascending: true });
+
+    if (internsError) throw internsError;
+
+    // Compute cumulative approved rendered hours per intern
+    internsMasterList.value = (internsData || []).map((intern: any) => {
+      const logs = intern.attendance_logs || [];
+      const totalHours = logs.reduce((acc: number, curr: any) => acc + (Number(curr.hours_rendered) || 0), 0);
+      const link = intern.intern_supervisor_links?.[0];
+      const supervisorProfile = link?.supervisor;
+      const companySite = supervisorProfile?.company_sites?.[0];
+
+      return {
+        ...intern,
+        totalRenderedHours: Number(totalHours.toFixed(2)),
+        supervisorName: link?.status === 'approved' ? supervisorProfile?.full_name : (link?.status === 'pending' ? 'Pending Approval' : 'Unassigned'),
+        companyName: link?.status === 'approved' ? (companySite?.company_name || 'N/A') : 'Unassigned',
+        linkStatus: link?.status || 'none',
+      };
+    });
+  } catch (err: any) {
+    console.error('Failed to load coordinator data:', err.message);
   } finally {
-    (event.target as HTMLIonRefresherElement).complete()
+    loading.value = false;
   }
-}
+};
 
-function scheduleRefresh(): void {
-  if (refreshTimer !== null) {
-    window.clearTimeout(refreshTimer)
-  }
-  refreshTimer = window.setTimeout(() => {
-    refreshTimer = null
-    void loadData().catch(() => undefined)
-  }, 600)
-}
+// Dispatch Transit Arrival Ping
+const pingTransitReminder = async (internId: string, internName: string) => {
+  isPinging.value = internId;
+  pingSuccessMessage.value = '';
+  pingErrorMessage.value = '';
 
-async function confirmPing(row: TransitFeedRow): Promise<void> {
-  const alert = await alertController.create({
-    header: `Ping ${row.intern.full_name}`,
-    message:
-      'Send a safe-at-base reminder. The intern receives an in-app record and an email.',
-    inputs: [
-      {
-        name: 'message',
-        type: 'textarea',
-        value: 'Please confirm that you are safe at base.',
-        placeholder: 'Message to the intern'
-      }
-    ],
-    buttons: [
-      { text: 'Cancel', role: 'cancel' },
-      {
-        text: 'Send ping',
-        role: 'confirm',
-        handler: (data) => {
-          void sendPing(row, String(data.message ?? ''))
-        }
-      }
-    ]
-  })
-
-  await alert.present()
-}
-
-async function sendPing(row: TransitFeedRow, message: string): Promise<void> {
-  pingingId.value = row.intern.intern_id
   try {
-    const text = message.trim() || 'Please confirm that you are safe at base.'
-    await safety.pingIntern(row.intern.intern_id, text)
-    const result = await sendTransitPingNotification({
-      internEmail: row.intern.email,
-      internName: row.intern.full_name,
-      coordinatorName: auth.displayName,
-      message: text,
-      baseAddress: row.intern.home_base_address
-    })
-    if (result.sent) {
-      showToast(`Ping sent to ${row.intern.full_name} and emailed.`, 'success')
-    } else {
-      showToast(
-        `Ping recorded. Email was not sent: ${result.reason ?? 'unknown error'}.`,
-        'warning'
-      )
-    }
-  } catch (err) {
-    showToast(
-      err instanceof Error ? err.message : 'Unable to ping the intern.',
-      'danger'
-    )
-  } finally {
-    pingingId.value = ''
-  }
-}
+    await new Promise((resolve) => setTimeout(resolve, 800));
 
-async function exportAccomplishments(): Promise<void> {
-  exporting.value = 'reports'
-  exportMessage.value = ''
-  try {
-    const rows = await coordinator.fetchReportsForExport()
-    downloadCsv(csvFilename('trainext-coordinator-accomplishments'), rows, [
-      {
-        label: 'Intern',
-        value: (row) => coordinator.internById(row.intern_id)?.full_name ?? ''
-      },
-      {
-        label: 'Email',
-        value: (row) => coordinator.internById(row.intern_id)?.email ?? ''
-      },
-      { label: 'Report date', value: (row) => row.report_date },
-      { label: 'Title', value: (row) => row.title },
-      { label: 'Tasks', value: (row) => row.tasks },
-      { label: 'Hours spent', value: (row) => Number(row.hours_spent).toFixed(2) },
-      { label: 'Status', value: (row) => row.status },
-      { label: 'Feedback', value: (row) => row.feedback ?? '' },
-      { label: 'Proof count', value: (row) => row.proofs?.length ?? 0 },
-      {
-        label: 'Proof links',
-        value: (row) =>
-          (row.proofs ?? [])
-            .map((proof) => proof.external_url ?? proof.file_name ?? '')
-            .filter(Boolean)
-            .join(' | ')
-      }
-    ])
-    exportMessage.value = `${rows.length} accomplishment record(s) exported.`
-    showToast('Accomplishment CSV downloaded.', 'success')
-  } catch (err) {
-    showToast(
-      err instanceof Error ? err.message : 'Unable to export accomplishments.',
-      'danger'
-    )
+    pingSuccessMessage.value = `Transit arrival reminder ping dispatched to ${internName}.`;
+    setTimeout(() => {
+      pingSuccessMessage.value = '';
+    }, 4000);
+  } catch (err: any) {
+    pingErrorMessage.value = err.message || 'Failed to dispatch transit reminder.';
   } finally {
-    exporting.value = ''
+    isPinging.value = null;
   }
-}
+};
 
-async function exportSafety(): Promise<void> {
-  exporting.value = 'safety'
-  exportMessage.value = ''
-  try {
-    const rows = await coordinator.fetchSafetyForExport()
-    downloadCsv(csvFilename('trainext-safety-logs'), rows, [
-      {
-        label: 'Intern',
-        value: (row) => coordinator.internById(row.intern_id)?.full_name ?? ''
-      },
-      {
-        label: 'Email',
-        value: (row) => coordinator.internById(row.intern_id)?.email ?? ''
-      },
-      { label: 'Check-in date', value: (row) => row.checkin_date },
-      {
-        label: 'Check-in time',
-        value: (row) => new Date(row.checkin_at).toLocaleString()
-      },
-      { label: 'Base label', value: (row) => row.base_label },
-      { label: 'Receipt code', value: (row) => row.receipt_code },
-      { label: 'Latitude', value: (row) => row.latitude ?? '' },
-      { label: 'Longitude', value: (row) => row.longitude ?? '' },
-      { label: 'Audit ID', value: (row) => row.id }
-    ])
-    exportMessage.value = `${rows.length} safety record(s) exported.`
-    showToast('Safety log CSV downloaded.', 'success')
-  } catch (err) {
-    showToast(
-      err instanceof Error ? err.message : 'Unable to export safety logs.',
-      'danger'
-    )
-  } finally {
-    exporting.value = ''
-  }
-}
+// 1. Export CSV Handler
+const handleExportCsv = () => {
+  const exportRows = internsMasterList.value.map((item) => ({
+    'Trainee Name': item.full_name,
+    'Contact Number': item.contact_number || 'N/A',
+    'Emergency Contact': item.emergency_contact_name || 'N/A',
+    'Emergency Contact Number': item.emergency_contact_number || 'N/A',
+    'Host Training Company': item.companyName,
+    'Assigned Supervisor': item.supervisorName,
+    'Total Rendered Hours': `${item.totalRenderedHours} hrs`,
+    'Affiliation Status': item.linkStatus.toUpperCase(),
+  }));
+
+  exportToCsv('TraiNext_OJT_Batch_Summary', exportRows);
+};
+
+// 2. Print / PDF Summary Report Handler
+const handlePrintPdf = () => {
+  const rows: TraineeExportRow[] = internsMasterList.value.map((item) => ({
+    fullName: item.full_name,
+    contactNumber: item.contact_number || 'N/A',
+    emergencyContact: item.emergency_contact_name || 'N/A',
+    emergencyNumber: item.emergency_contact_number || 'N/A',
+    supervisorName: item.supervisorName,
+    companyName: item.companyName,
+    totalRenderedHours: item.totalRenderedHours,
+    affiliationStatus: item.linkStatus,
+  }));
+
+  printSummaryReport({
+    coordinatorName: authStore.user?.full_name || 'OJT Coordinator',
+    batchTitle: 'IT OJT Trainees Batch',
+    data: rows,
+  });
+};
 
 onMounted(async () => {
-  try {
-    await loadData()
-    safety.subscribeCoordinator(scheduleRefresh)
-  } catch (err) {
-    showToast(
-      err instanceof Error ? err.message : 'Unable to load coordinator dashboard.',
-      'danger'
-    )
+  await authStore.fetchProfile();
+  if (!authStore.isAuthenticated || !authStore.isCoordinator || !authStore.user) {
+    router.push('/auth');
+    return;
   }
-})
-
-onBeforeUnmount(() => {
-  if (refreshTimer !== null) {
-    window.clearTimeout(refreshTimer)
-    refreshTimer = null
-  }
-  safety.unsubscribe()
-})
+  await fetchCoordinatorData();
+});
 </script>
 
-<style scoped>
-/* Typography Definition */
-.font-aileron {
-  font-family: 'Aileron', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-}
+<template>
+  <div class="min-h-screen bg-[#0a0f1d] text-slate-100 p-4 sm:p-8 relative overflow-hidden select-none">
+    <!-- Ambient Neon Cyberpunk Glow Backdrops -->
+    <div class="absolute -top-40 -left-40 w-96 h-96 bg-cyan-500/10 rounded-full blur-[140px] pointer-events-none"></div>
+    <div class="absolute top-1/2 -right-40 w-96 h-96 bg-fuchsia-500/10 rounded-full blur-[140px] pointer-events-none"></div>
 
-.font-regular {
-  font-family: 'Aileron', sans-serif !important;
-  font-weight: 400 !important;
-}
+    <div class="max-w-7xl mx-auto space-y-6 relative z-10">
+      
+      <!-- Top Dynamic Header Bar -->
+      <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-[#0d1527]/80 border border-cyan-500/25 backdrop-blur-2xl shadow-[0_0_35px_rgba(6,182,212,0.12)]">
+        <div>
+          <div class="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-cyan-500/15 border border-cyan-400/40 text-[10px] font-bold text-cyan-300 uppercase tracking-widest mb-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping"></span>
+            School Coordinator Portal
+          </div>
+          <h1 class="text-xl sm:text-2xl font-black text-white tracking-wide">
+            Institutional OJT Command Center
+          </h1>
+          <p class="text-xs text-slate-400">
+            Coordinator: {{ authStore.user?.full_name }} • Batch Accountability & Transit Live Feed
+          </p>
+        </div>
 
-.font-bold {
-  font-family: 'Aileron Bold', 'Aileron', sans-serif !important;
-  font-weight: 700 !important;
-}
+        <div class="flex items-center gap-2.5 flex-wrap">
+          <button 
+            @click="handleExportCsv"
+            :disabled="internsMasterList.length === 0"
+            class="px-4 py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-cyan-500/30 text-xs font-bold text-cyan-300 hover:text-white transition flex items-center gap-1.5 disabled:opacity-40"
+          >
+            <span>📊</span>
+            <span>Download CSV</span>
+          </button>
+          <button 
+            @click="handlePrintPdf"
+            :disabled="internsMasterList.length === 0"
+            class="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 text-white text-xs font-bold uppercase tracking-wider shadow-[0_0_20px_rgba(6,182,212,0.25)] transition flex items-center gap-1.5 disabled:opacity-40"
+          >
+            <span>🖨️</span>
+            <span>Print / PDF Report</span>
+          </button>
+          <button 
+            @click="fetchCoordinatorData"
+            class="px-3 py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700 text-xs text-slate-300 hover:text-white transition"
+            title="Refresh Feed"
+          >
+            🔄
+          </button>
+          <button 
+            @click="authStore.signOut(); router.push('/auth');"
+            class="px-4 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition"
+          >
+            Sign Out
+          </button>
+        </div>
+      </header>
 
-.font-heavy {
-  font-family: 'Aileron Heavy', 'Aileron Black', 'Aileron Bold', 'Aileron', sans-serif !important;
-  font-weight: 900 !important;
-}
+      <!-- Feedback Banners -->
+      <div v-if="pingSuccessMessage" class="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-300 font-medium">
+        {{ pingSuccessMessage }}
+      </div>
+      <div v-if="pingErrorMessage" class="p-4 rounded-2xl bg-red-950/60 border border-red-500/40 text-xs text-red-300 font-medium">
+        {{ pingErrorMessage }}
+      </div>
 
-/* Ionic Background Override */
-ion-content.dashboard-content {
-  --background: transparent !important;
-}
-ion-content.dashboard-content::part(background) {
-  background: transparent !important;
-}
+      <!-- 1. REAL-TIME SAFETY & TRANSIT METRIC COUNTERS -->
+      <section class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <!-- In Transit Counter -->
+        <div class="p-5 rounded-3xl bg-[#0d1527]/90 border border-amber-500/40 backdrop-blur-2xl shadow-[0_0_35px_rgba(245,158,11,0.15)] flex items-center justify-between">
+          <div>
+            <div class="inline-flex items-center gap-1.5 text-[10px] font-bold text-amber-400 uppercase tracking-widest mb-1">
+              <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+              In Transit (En Route)
+            </div>
+            <div class="text-3xl font-black text-white font-mono">{{ inTransitCount }}</div>
+            <p class="text-[11px] text-slate-400 mt-1">Clocked out; heading to dorm/home</p>
+          </div>
+          <div class="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-2xl text-amber-300">
+            🚶
+          </div>
+        </div>
 
-/* Crisp & Transparent Glassmorphic Cards */
-.trainext-glass-card {
-  border-radius: 28px !important;
-  border: 1px solid rgba(255, 255, 255, 0.22) !important;
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.06) 0%,
-    rgba(4, 9, 22, 0.38) 40%,
-    rgba(2, 6, 17, 0.50) 100%
-  ) !important;
-  backdrop-filter: blur(8px) saturate(140%) !important;
-  -webkit-backdrop-filter: blur(8px) saturate(140%) !important;
-  box-shadow: 
-    0 16px 40px rgba(0, 0, 0, 0.75),
-    inset 0 1px 1px rgba(255, 255, 255, 0.35) !important;
-  padding: 24px !important;
-  box-sizing: border-box !important;
-}
+        <!-- Safe at Base Counter -->
+        <div class="p-5 rounded-3xl bg-[#0d1527]/90 border border-emerald-500/40 backdrop-blur-2xl shadow-[0_0_35px_rgba(16,185,129,0.15)] flex items-center justify-between">
+          <div>
+            <div class="inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-400 uppercase tracking-widest mb-1">
+              <span>🛡️</span>
+              Safe at Base
+            </div>
+            <div class="text-3xl font-black text-white font-mono">{{ safeAtBaseCount }}</div>
+            <p class="text-[11px] text-slate-400 mt-1">Arrival validated; accountability cleared</p>
+          </div>
+          <div class="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center text-2xl text-emerald-300">
+            🏠
+          </div>
+        </div>
 
-/* Custom Navigation Segment Tabs */
-.tab-nav-btn {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 14px;
-  border-radius: 9999px;
-  font-family: 'Aileron Bold', 'Aileron', sans-serif;
-  font-size: 13px;
-  font-weight: 700;
-  color: #94a3b8;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: all 0.25s ease;
-}
+        <!-- On Duty Counter -->
+        <div class="p-5 rounded-3xl bg-[#0d1527]/90 border border-cyan-500/40 backdrop-blur-2xl shadow-[0_0_35px_rgba(6,182,212,0.15)] flex items-center justify-between">
+          <div>
+            <div class="inline-flex items-center gap-1.5 text-[10px] font-bold text-cyan-400 uppercase tracking-widest mb-1">
+              <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+              On Duty (At Office)
+            </div>
+            <div class="text-3xl font-black text-white font-mono">{{ onDutyCount }}</div>
+            <p class="text-[11px] text-slate-400 mt-1">Currently inside office geofence</p>
+          </div>
+          <div class="w-12 h-12 rounded-2xl bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center text-2xl text-cyan-300">
+            🏢
+          </div>
+        </div>
+      </section>
 
-.tab-nav-btn:hover {
-  color: #ffffff;
-}
+      <!-- 2. LIVE TRANSIT FEED & PING PROMPT SECTION -->
+      <section class="space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-lg font-bold text-white tracking-wide">
+              Live Transit Safety Watch
+            </h2>
+            <p class="text-xs text-slate-400">
+              Trainees who have completed today's shift and are currently traveling back to their base
+            </p>
+          </div>
+          <span class="px-3 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-bold font-mono">
+            {{ inTransitCount }} Trainees En Route
+          </span>
+        </div>
 
-.tab-nav-btn-active {
-  background: rgba(0, 194, 255, 0.16) !important;
-  color: #00C2FF !important;
-  border: 1px solid rgba(0, 194, 255, 0.35) !important;
-  box-shadow: 0 0 14px rgba(0, 194, 255, 0.25) !important;
-}
+        <!-- Empty State -->
+        <div v-if="inTransitCount === 0" class="p-8 rounded-3xl bg-[#0d1527]/50 border border-slate-800/80 text-center text-xs text-slate-400">
+          No trainees currently in transit. All shifts are either on duty or safely accounted for at their residence.
+        </div>
 
-.badge-counter {
-  padding: 2px 7px;
-  background: #ef4444;
-  color: #ffffff;
-  border-radius: 9999px;
-  font-size: 10px;
-  font-weight: 900;
-}
+        <!-- In-Transit Trainees Grid -->
+        <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div 
+            v-for="log in todayAttendanceLogs.filter(l => l.status === 'in_transit')" 
+            :key="log.id"
+            class="p-5 rounded-2xl bg-[#0d1527]/90 border border-amber-500/35 backdrop-blur-xl shadow-[0_0_25px_rgba(245,158,11,0.1)] space-y-3"
+          >
+            <div class="flex items-start justify-between">
+              <div>
+                <h3 class="text-base font-bold text-white">{{ (log as any).intern?.full_name || 'Trainee' }}</h3>
+                <p class="text-xs text-slate-400 font-mono">Contact: {{ (log as any).intern?.contact_number || 'N/A' }}</p>
+                <p class="text-[11px] text-slate-400 mt-0.5">
+                  Clocked Out At: <span class="font-mono text-amber-300 font-semibold">{{ new Date(log.time_out || '').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+                </p>
+              </div>
+              <span class="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold uppercase tracking-wider border border-amber-500/30">
+                In Transit
+              </span>
+            </div>
 
-/* Metric Stat Tiles */
-.stat-tile {
-  background: rgba(255, 255, 255, 0.04) !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  border-radius: 20px !important;
-  padding: 14px 12px !important;
-  text-align: center !important;
-}
+            <!-- Emergency Contact Line -->
+            <div class="p-2.5 rounded-xl bg-slate-900/80 border border-slate-800 text-[11px] text-slate-300 flex items-center justify-between">
+              <span>Emergency Contact:</span>
+              <span class="font-semibold text-slate-200">{{ (log as any).intern?.emergency_contact_name || 'N/A' }} ({{ (log as any).intern?.emergency_contact_number || 'N/A' }})</span>
+            </div>
 
-.stat-label {
-  font-size: 9.5px !important;
-  font-weight: 800 !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.1em !important;
-  color: #94a3b8 !important;
-  margin: 0 !important;
-}
+            <!-- Action Prompt -->
+            <div class="pt-2 border-t border-slate-800/80 flex items-center justify-end">
+              <button 
+                @click="pingTransitReminder(log.intern_id, (log as any).intern?.full_name)"
+                :disabled="isPinging === log.intern_id"
+                class="px-4 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold transition flex items-center gap-1.5"
+              >
+                <span>🔔</span>
+                <span>{{ isPinging === log.intern_id ? 'Pinging...' : 'Send Transit Arrival Ping' }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
 
-.stat-value {
-  font-size: 22px !important;
-  font-family: 'Aileron Heavy', 'Aileron', sans-serif !important;
-  font-weight: 900 !important;
-  margin: 4px 0 0 0 !important;
-}
+      <!-- 3. MASTER ROSTER OF BATCH INTERNS -->
+      <section class="space-y-4 pt-2">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-lg font-bold text-white tracking-wide">
+              Registered Trainees Master List
+            </h2>
+            <p class="text-xs text-slate-400">
+              Complete batch roster with cumulative rendered hours, host company, and supervisor affiliation
+            </p>
+          </div>
+          <span class="px-3 py-1 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 text-xs font-bold font-mono">
+            {{ internsMasterList.length }} Registered
+          </span>
+        </div>
 
-/* Card Header Titles */
-.card-title {
-  font-family: 'Aileron Heavy', 'Aileron Bold', 'Aileron', sans-serif !important;
-  font-size: 19px !important;
-  font-weight: 900 !important;
-  letter-spacing: -0.01em !important;
-  margin: 0 !important;
-}
+        <div v-if="internsMasterList.length === 0" class="p-8 rounded-3xl bg-[#0d1527]/50 border border-slate-800/80 text-center text-xs text-slate-400">
+          No registered interns enrolled in this batch yet.
+        </div>
 
-.card-subtitle {
-  font-family: 'Aileron Bold', 'Aileron', sans-serif !important;
-  font-size: 12px !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.01em !important;
-  margin: 0 !important;
-}
+        <div v-else class="overflow-x-auto rounded-3xl border border-slate-800/80 bg-[#0d1527]/80 backdrop-blur-2xl">
+          <table class="w-full text-left text-sm text-slate-300">
+            <thead class="bg-slate-900/80 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-800 tracking-wider">
+              <tr>
+                <th class="p-4">Trainee Name</th>
+                <th class="p-4">Host Company</th>
+                <th class="p-4">Supervisor</th>
+                <th class="p-4">Contact</th>
+                <th class="p-4">Total Rendered Hours</th>
+                <th class="p-4 text-right">Affiliation Status</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/50">
+              <tr v-for="intern in internsMasterList" :key="intern.id" class="hover:bg-slate-800/30 transition">
+                <td class="p-4 font-semibold text-white">{{ intern.full_name }}</td>
+                <td class="p-4 text-xs text-slate-300">{{ intern.companyName }}</td>
+                <td class="p-4 text-xs text-slate-300 font-medium">{{ intern.supervisorName }}</td>
+                <td class="p-4 text-xs font-mono text-cyan-300">{{ intern.contact_number || 'N/A' }}</td>
+                <td class="p-4">
+                  <span class="font-mono font-bold text-emerald-400 bg-emerald-950/60 px-2.5 py-1 rounded-md border border-emerald-500/30 text-xs">
+                    {{ intern.totalRenderedHours }} hrs
+                  </span>
+                </td>
+                <td class="p-4 text-right">
+                  <span 
+                    v-if="intern.linkStatus === 'approved'"
+                    class="px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 text-[10px] font-bold uppercase tracking-wider border border-emerald-500/30"
+                  >
+                    Active
+                  </span>
+                  <span 
+                    v-else-if="intern.linkStatus === 'pending'"
+                    class="px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300 text-[10px] font-bold uppercase tracking-wider border border-amber-500/30"
+                  >
+                    Pending Link
+                  </span>
+                  <span 
+                    v-else
+                    class="px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 text-[10px] font-bold uppercase tracking-wider border border-slate-700"
+                  >
+                    Unassigned
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
 
-/* History / Feed Row */
-.history-row {
-  background: rgba(255, 255, 255, 0.03) !important;
-  border: 1px solid rgba(255, 255, 255, 0.10) !important;
-  border-radius: 20px !important;
-  padding: 16px 18px !important;
-  transition: all 0.2s ease !important;
-}
-
-.history-row:hover {
-  background: rgba(255, 255, 255, 0.06) !important;
-  border-color: rgba(0, 194, 255, 0.3) !important;
-}
-
-/* Badges / Chips */
-.badge-pill {
-  display: inline-flex !important;
-  align-items: center !important;
-  padding: 5px 12px !important;
-  border-radius: 9999px !important;
-  font-size: 11px !important;
-  font-weight: 800 !important;
-  letter-spacing: 0.04em !important;
-}
-
-.badge-pill-success {
-  background: rgba(16, 185, 129, 0.16) !important;
-  color: #34d399 !important;
-  border: 1px solid rgba(16, 185, 129, 0.35) !important;
-}
-
-.badge-pill-danger {
-  background: rgba(239, 68, 68, 0.16) !important;
-  color: #f87171 !important;
-  border: 1px solid rgba(239, 68, 68, 0.35) !important;
-}
-
-.badge-pill-cyan {
-  background: rgba(0, 194, 255, 0.16) !important;
-  color: #00C2FF !important;
-  border: 1px solid rgba(0, 194, 255, 0.35) !important;
-}
-
-.badge-pill-slate {
-  background: rgba(148, 163, 184, 0.12) !important;
-  color: #cbd5e1 !important;
-  border: 1px solid rgba(255, 255, 255, 0.15) !important;
-}
-
-/* Action Buttons */
-.pill-btn-outline {
-  background: rgba(255, 255, 255, 0.05) !important;
-  border: 1px solid rgba(255, 255, 255, 0.25) !important;
-  color: #ffffff !important;
-  border-radius: 9999px !important;
-  padding: 8px 16px !important;
-  font-size: 11.5px !important;
-  font-weight: 800 !important;
-  cursor: pointer !important;
-  transition: all 0.2s ease !important;
-}
-
-.pill-btn-outline:hover:not(:disabled) {
-  border-color: #00C2FF !important;
-  color: #00C2FF !important;
-}
-
-.pill-btn-outline:disabled {
-  opacity: 0.45 !important;
-  cursor: not-allowed !important;
-}
-
-.pill-btn-sm {
-  background: rgba(0, 194, 255, 0.12) !important;
-  border: 1px solid rgba(0, 194, 255, 0.3) !important;
-  color: #00C2FF !important;
-  border-radius: 9999px !important;
-  padding: 5px 12px !important;
-  font-size: 11px !important;
-  font-weight: 800 !important;
-  cursor: pointer !important;
-  transition: all 0.2s ease !important;
-}
-
-.pill-btn-sm:hover:not(:disabled) {
-  background: rgba(0, 194, 255, 0.25) !important;
-}
-
-.pill-btn-sm:disabled {
-  opacity: 0.45 !important;
-  cursor: not-allowed !important;
-}
-</style>
+    </div>
+  </div>
+</template>

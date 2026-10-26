@@ -1,404 +1,189 @@
-import { computed, ref } from 'vue'
-import { defineStore } from 'pinia'
-import type { Session } from '@supabase/supabase-js'
-import { supabase } from '@/lib/supabase'
-import type {
-  MentorOption,
-  Profile,
-  ProfileUpdateInput,
-  UserRole
-} from '@/types'
+import { defineStore } from 'pinia';
+import { ref, computed } from 'vue';
+import { supabase } from '@/lib/supabase';
+import type { UserProfile, UserRole } from '@/types';
 
 export const useAuthStore = defineStore('auth', () => {
-  const session = ref<Session | null>(null)
-  const profile = ref<Profile | null>(null)
-  const mentors = ref<MentorOption[]>([])
-  const initialized = ref(false)
-  const loading = ref(false)
-  const error = ref('')
+  const user = ref<UserProfile | null>(null);
+  const loading = ref(false);
+  const errorMessage = ref<string | null>(null);
 
-  let subscription: { unsubscribe: () => void } | null = null
+  const isAuthenticated = computed(() => !!user.value);
+  const isIntern = computed(() => user.value?.role === 'intern');
+  const isSupervisor = computed(() => user.value?.role === 'supervisor');
+  const isCoordinator = computed(() => user.value?.role === 'coordinator');
 
-  const isAuthenticated = computed(() => Boolean(session.value))
-  const isReady = computed(() => initialized.value && Boolean(profile.value))
-  const role = computed<UserRole | null>(() => profile.value?.role ?? null)
-  const isIntern = computed(() => role.value === 'intern')
-  const isSupervisor = computed(() => role.value === 'supervisor')
-  const isCoordinator = computed(() => role.value === 'coordinator')
-  const displayName = computed(
-    () => profile.value?.full_name || profile.value?.email || 'TraiNext user'
-  )
-  const needsAccountLink = computed(
-    () =>
-      isIntern.value &&
-      (!profile.value?.supervisor_id || !profile.value?.coordinator_id)
-  )
-  const isFullyVerified = computed(() => {
-    if (!profile.value) {
-      return false
-    }
-    if (profile.value.role !== 'intern') {
-      return true
-    }
-    return (
-      profile.value.enrollment_status === 'approved' &&
-      profile.value.deployment_status === 'approved'
-    )
-  })
+  // Detects production URL (Vercel) or local development for Auth redirects
+  const getRedirectUrl = (path: string = '') => {
+    const origin = window.location.origin;
+    return `${origin}${path}`;
+  };
 
-  async function fetchProfile(): Promise<Profile | null> {
-    if (!session.value?.user) {
-      profile.value = null
-      return null
-    }
-
-    const { data, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', session.value.user.id)
-      .single()
-
-    if (profileError) {
-      error.value = profileError.message
-      profile.value = null
-      return null
-    }
-
-    profile.value = data as Profile
-    return profile.value
-  }
-
-  async function initialize(): Promise<void> {
-    if (initialized.value) {
-      return
-    }
-
-    loading.value = true
-    error.value = ''
+  /**
+   * 1. Sign Up with User Role, Full Name, Contact Number
+   * Sends confirmation email link to Gmail.
+   */
+  const signUp = async (params: {
+    email: string;
+    password: string;
+    fullName: string;
+    contactNumber: string;
+    role: UserRole;
+  }) => {
+    loading.value = true;
+    errorMessage.value = null;
 
     try {
-      const { data, error: sessionError } = await supabase.auth.getSession()
-      if (sessionError) {
-        throw sessionError
-      }
-
-      session.value = data.session
-      if (session.value) {
-        await fetchProfile()
-      }
-
-      if (!subscription) {
-        const { data: listener } = supabase.auth.onAuthStateChange(
-          (event, nextSession) => {
-            session.value = nextSession
-
-            if (!nextSession) {
-              profile.value = null
-              return
-            }
-
-            if (
-              event === 'SIGNED_IN' ||
-              event === 'USER_UPDATED' ||
-              event === 'TOKEN_REFRESHED' ||
-              event === 'PASSWORD_RECOVERY'
-            ) {
-              void fetchProfile()
-            }
-          }
-        )
-        subscription = listener.subscription
-      }
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Unable to initialize session.'
-    } finally {
-      initialized.value = true
-      loading.value = false
-    }
-  }
-
-  async function signIn(email: string, password: string): Promise<Profile> {
-    loading.value = true
-    error.value = ''
-
-    try {
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password
-      })
-
-      if (signInError) {
-        throw signInError
-      }
-
-      session.value = data.session
-      const nextProfile = await fetchProfile()
-
-      if (!nextProfile) {
-        throw new Error('Your account is missing a TraiNext profile.')
-      }
-
-      return nextProfile
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Sign in failed.'
-      throw err
-    } finally {
-      loading.value = false
-    }
-  }
-
-  async function signUp(
-    email: string,
-    password: string,
-    fullName: string,
-    userRole: UserRole
-  ): Promise<{ needsEmailConfirmation: boolean }> {
-    loading.value = true
-    error.value = ''
-
-    try {
-      const { data, error: signUpError } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
+      const { data, error } = await supabase.auth.signUp({
+        email: params.email,
+        password: params.password,
         options: {
           data: {
-            full_name: fullName.trim(),
-            role: userRole
-          }
-        }
-      })
+            full_name: params.fullName,
+            contact_number: params.contactNumber,
+            role: params.role,
+          },
+          emailRedirectTo: getRedirectUrl('/auth'),
+        },
+      });
 
-      if (signUpError) {
-        throw signUpError
-      }
-
-      session.value = data.session
-
-      if (!data.session) {
-        return { needsEmailConfirmation: true }
-      }
-
-      await fetchProfile()
-      return { needsEmailConfirmation: false }
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Sign up failed.'
-      throw err
+      if (error) throw error;
+      return data;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to sign up. Please try again.';
+      throw err;
     } finally {
-      loading.value = false
+      loading.value = false;
     }
-  }
+  };
 
-  async function verifyOtp(email: string, token: string): Promise<Profile | null> {
-    loading.value = true
-    error.value = ''
+  /**
+   * 2. Direct Sign In with Email and Password
+   */
+  const signIn = async (email: string, pass: string) => {
+    loading.value = true;
+    errorMessage.value = null;
 
     try {
-      const { data, error: verifyError } = await supabase.auth.verifyOtp({
-        email: email.trim(),
-        token: token.trim(),
-        type: 'signup'
-      })
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password: pass,
+      });
 
-      if (verifyError) {
-        throw verifyError
+      if (error) throw error;
+      await fetchProfile();
+      return data;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Invalid email or password.';
+      throw err;
+    } finally {
+      loading.value = false;
+    }
+  };
+
+  /**
+   * 3. Fetch Master Profile Record
+   */
+  const fetchProfile = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) {
+        user.value = null;
+        return null;
       }
 
-      session.value = data.session
-      const nextProfile = await fetchProfile()
-      return nextProfile
-    } catch (err) {
-      error.value =
-        err instanceof Error ? err.message : 'Unable to verify the email code.'
-      throw err
-    } finally {
-      loading.value = false
-    }
-  }
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', session.user.id)
+        .single();
 
-  async function resendOtp(email: string): Promise<void> {
-    loading.value = true
-    error.value = ''
+      if (error) throw error;
+      user.value = data as UserProfile;
+      return user.value;
+    } catch (err: any) {
+      console.error('Error fetching profile:', err.message);
+      return null;
+    }
+  };
+
+  /**
+   * 4. Forgot Password - Dispatches Password Reset Email
+   */
+  const sendPasswordReset = async (emailAddress: string) => {
+    loading.value = true;
+    errorMessage.value = null;
 
     try {
-      const { error: resendError } = await supabase.auth.resend({
-        type: 'signup',
-        email: email.trim()
-      })
+      const { error } = await supabase.auth.resetPasswordForEmail(emailAddress, {
+        redirectTo: getRedirectUrl('/reset-password'),
+      });
 
-      if (resendError) {
-        throw resendError
-      }
-    } catch (err) {
-      error.value =
-        err instanceof Error ? err.message : 'Unable to resend the verification code.'
-      throw err
+      if (error) throw error;
+      return true;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to send password reset email.';
+      throw err;
     } finally {
-      loading.value = false
+      loading.value = false;
     }
-  }
+  };
 
-  async function requestPasswordReset(email: string): Promise<void> {
-    loading.value = true
-    error.value = ''
+  /**
+   * 5. Update Profile Record (Used in Profile Settings Modal)
+   */
+  const updateProfile = async (updates: Partial<UserProfile>) => {
+    if (!user.value) return;
+    loading.value = true;
 
     try {
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-        email.trim(),
-        {
-          redirectTo: `${window.location.origin}/reset-password`
-        }
-      )
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({
+          ...updates,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', user.value.id)
+        .select()
+        .single();
 
-      if (resetError) {
-        throw resetError
-      }
-    } catch (err) {
-      error.value =
-        err instanceof Error ? err.message : 'Unable to send the password reset link.'
-      throw err
+      if (error) throw error;
+      user.value = data as UserProfile;
+      return user.value;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to update profile information.';
+      throw err;
     } finally {
-      loading.value = false
+      loading.value = false;
     }
-  }
+  };
 
-  async function updatePassword(password: string): Promise<void> {
-    loading.value = true
-    error.value = ''
-
+  /**
+   * 6. Sign Out
+   */
+  const signOut = async () => {
+    loading.value = true;
     try {
-      const { error: updateError } = await supabase.auth.updateUser({
-        password
-      })
-
-      if (updateError) {
-        throw updateError
-      }
-
-      await fetchProfile()
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Unable to update password.'
-      throw err
+      await supabase.auth.signOut();
+      user.value = null;
     } finally {
-      loading.value = false
+      loading.value = false;
     }
-  }
-
-  async function updateProfile(input: ProfileUpdateInput): Promise<Profile> {
-    loading.value = true
-    error.value = ''
-
-    try {
-      const { data, error: updateError } = await supabase.rpc('update_my_profile', {
-        p_full_name: input.full_name,
-        p_phone: input.phone,
-        p_id_number: input.id_number,
-        p_university_name: input.university_name,
-        p_company_name: input.company_name,
-        p_company_address: input.company_address,
-        p_home_base_address: input.home_base_address,
-        p_emergency_contact_name: input.emergency_contact_name,
-        p_emergency_contact_relationship: input.emergency_contact_relationship,
-        p_emergency_contact_phone: input.emergency_contact_phone
-      })
-
-      if (updateError) {
-        throw updateError
-      }
-
-      profile.value = data as Profile
-      return profile.value
-    } catch (err) {
-      error.value = err instanceof Error ? err.message : 'Unable to update profile.'
-      throw err
-    } finally {
-      loading.value = false
-    }
-  }
-
-  async function linkAccounts(
-    coordinatorId: string,
-    supervisorId: string
-  ): Promise<Profile> {
-    loading.value = true
-    error.value = ''
-
-    try {
-      const { data, error: linkError } = await supabase.rpc(
-        'link_intern_accounts',
-        {
-          p_coordinator_id: coordinatorId,
-          p_supervisor_id: supervisorId
-        }
-      )
-
-      if (linkError) {
-        throw linkError
-      }
-
-      profile.value = data as Profile
-      return profile.value
-    } catch (err) {
-      error.value =
-        err instanceof Error ? err.message : 'Unable to link your accounts.'
-      throw err
-    } finally {
-      loading.value = false
-    }
-  }
-
-  async function fetchMentors(): Promise<MentorOption[]> {
-    const { data, error: mentorError } = await supabase.rpc('list_mentors')
-    if (mentorError) {
-      throw mentorError
-    }
-    mentors.value = (data ?? []) as MentorOption[]
-    return mentors.value
-  }
-
-  async function signOut(): Promise<void> {
-    loading.value = true
-    try {
-      await supabase.auth.signOut()
-    } finally {
-      session.value = null
-      profile.value = null
-      mentors.value = []
-      loading.value = false
-    }
-  }
-
-  function clearError(): void {
-    error.value = ''
-  }
+  };
 
   return {
-    session,
-    profile,
-    mentors,
-    initialized,
+    user,
     loading,
-    error,
+    errorMessage,
     isAuthenticated,
-    isReady,
-    role,
     isIntern,
     isSupervisor,
     isCoordinator,
-    isFullyVerified,
-    needsAccountLink,
-    displayName,
-    initialize,
-    fetchProfile,
-    signIn,
     signUp,
-    verifyOtp,
-    resendOtp,
-    requestPasswordReset,
-    updatePassword,
+    signIn,
+    fetchProfile,
+    sendPasswordReset,
     updateProfile,
-    linkAccounts,
-    fetchMentors,
     signOut,
-    clearError
-  }
-})
+  };
+});

@@ -1,184 +1,94 @@
-export type UserRole = 'intern' | 'supervisor' | 'coordinator'
-export type ApprovalStatus = 'pending' | 'approved' | 'rejected'
-export type ProofKind = 'image' | 'document' | 'video'
-export type TransitState = 'safe' | 'in_transit' | 'delayed'
-export type ApprovalCadence = 'daily' | 'weekly' | 'monthly'
+export type UserRole = 'intern' | 'supervisor' | 'coordinator';
+export type RequestStatus = 'pending' | 'approved' | 'rejected';
+export type AttendanceStatus = 'on_duty' | 'in_transit' | 'safe_at_base';
 
-export interface Profile {
-  id: string
-  email: string
-  full_name: string
-  role: UserRole
-  supervisor_id: string | null
-  coordinator_id: string | null
-  company_site_id: string | null
-  required_hours: number
-  enrollment_status: ApprovalStatus
-  deployment_status: ApprovalStatus
-  enrollment_feedback: string | null
-  deployment_feedback: string | null
-  phone: string | null
-  id_number: string | null
-  university_name: string | null
-  company_name: string | null
-  company_address: string | null
-  home_base_address: string | null
-  emergency_contact_name: string | null
-  emergency_contact_relationship: string | null
-  emergency_contact_phone: string | null
-  created_at: string
-  updated_at: string
+// 1. Profile Type para sa lahat ng users
+export interface UserProfile {
+  id: string;
+  full_name: string;
+  role: UserRole;
+  contact_number?: string;
+  home_address?: string;
+  emergency_contact_name?: string;
+  emergency_contact_number?: string;
+  avatar_url?: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
+// 2. Company Site Type (Tanging si Supervisor ang nagmamay-ari)
 export interface CompanySite {
-  id: string
-  supervisor_id: string
-  name: string
-  address: string
-  latitude: number
-  longitude: number
-  radius_meters: number
-  is_active: boolean
-  created_at: string
-  updated_at: string
+  id: string;
+  supervisor_id: string;
+  company_name: string;
+  office_address: string;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+  created_at?: string;
+  updated_at?: string;
 }
 
+// 3. Smart Link Type (Intern <-> Supervisor Request)
+export interface InternSupervisorLink {
+  id: string;
+  intern_id: string;
+  supervisor_id: string;
+  status: RequestStatus;
+  rejection_reason?: string | null;
+  linked_at?: string | null;
+  created_at?: string;
+  // Joins para sa UI queries
+  supervisor?: UserProfile & {
+    company_sites?: CompanySite[];
+  };
+  intern?: UserProfile;
+}
+
+// 4. Attendance & Geofenced DTR Record
 export interface AttendanceLog {
-  id: string
-  intern_id: string
-  site_id: string | null
-  clock_in_at: string
-  clock_out_at: string | null
-  clock_in_latitude: number
-  clock_in_longitude: number
-  clock_out_latitude: number | null
-  clock_out_longitude: number | null
-  hours_rendered: number
-  status: ApprovalStatus
-  reviewed_by: string | null
-  reviewed_at: string | null
-  feedback: string | null
-  created_at: string
-  updated_at: string
+  id: string;
+  intern_id: string;
+  supervisor_id?: string;
+  date: string;
+  time_in: string;
+  time_in_lat?: number;
+  time_in_lng?: number;
+  time_out?: string | null;
+  hours_rendered: number;
+  status: AttendanceStatus;
+  safe_at_base_time?: string | null;
+  transit_waiver_agreed: boolean;
+  created_at?: string;
+  intern?: UserProfile;
 }
 
-export interface AccomplishmentProof {
-  id: string
-  report_id: string
-  intern_id: string
-  kind: ProofKind
-  storage_path: string | null
-  external_url: string | null
-  file_name: string | null
-  mime_type: string | null
-  created_at: string
+// 5. Accomplishment Log with Multi-Proof Support
+export interface AccomplishmentLog {
+  id: string;
+  intern_id: string;
+  supervisor_id?: string;
+  title: string;
+  description: string;
+  report_date: string;
+  rendered_hours: number;
+  proof_images: string[];
+  proof_documents: string[];
+  video_url?: string | null;
+  status: RequestStatus;
+  feedback?: string | null;
+  approved_at?: string | null;
+  created_at?: string;
+  intern?: UserProfile;
 }
 
-export interface AccomplishmentReport {
-  id: string
-  intern_id: string
-  attendance_log_id: string | null
-  report_date: string
-  title: string
-  tasks: string
-  hours_spent: number
-  status: ApprovalStatus
-  reviewed_by: string | null
-  reviewed_at: string | null
-  feedback: string | null
-  created_at: string
-  updated_at: string
-  proofs?: AccomplishmentProof[]
-}
-
-export interface SafeCheckin {
-  id: string
-  intern_id: string
-  checkin_at: string
-  checkin_date: string
-  base_label: string
-  latitude: number | null
-  longitude: number | null
-  receipt_code: string
-  created_at: string
-}
-
-export interface TransitPing {
-  id: string
-  intern_id: string
-  coordinator_id: string
-  message: string
-  created_at: string
-}
-
-export interface MentorOption {
-  id: string
-  full_name: string
-  role: Extract<UserRole, 'supervisor' | 'coordinator'>
-  organization: string
-}
-
-export interface ProfileUpdateInput {
-  full_name: string
-  phone: string
-  id_number: string
-  university_name: string
-  company_name: string
-  company_address: string
-  home_base_address: string
-  emergency_contact_name: string
-  emergency_contact_relationship: string
-  emergency_contact_phone: string
-}
-
-export interface InternProgress {
-  intern_id: string
-  full_name: string
-  email: string
-  required_hours: number
-  supervisor_id: string | null
-  company_site_id: string | null
-  approved_hours: number
-  pending_hours: number
-  pending_reviews: number
-  coordinator_id: string | null
-  enrollment_status: ApprovalStatus
-  deployment_status: ApprovalStatus
-  phone: string | null
-  id_number: string | null
-  university_name: string | null
-  company_name: string | null
-  home_base_address: string | null
-  enrollment_feedback: string | null
-  deployment_feedback: string | null
-}
-
-export interface TransitFeedRow {
-  intern: InternProgress
-  state: TransitState
-  checkin: SafeCheckin | null
-  openLog: AttendanceLog | null
-  lastLog: AttendanceLog | null
-  lastPing: TransitPing | null
-}
-
-export interface GeoPosition {
-  latitude: number
-  longitude: number
-  accuracy: number | null
-  timestamp: number
-}
-
-export interface SiteInput {
-  name: string
-  address: string
-  latitude: number
-  longitude: number
-  radius_meters: number
-  is_active: boolean
-}
-
-export interface ProofUpload {
-  file: File
-  kind: ProofKind
+// 6. Geolocation State Tracker
+export interface GeoLocationState {
+  coords: {
+    latitude: number;
+    longitude: number;
+    accuracy: number;
+  } | null;
+  error: string | null;
+  loading: boolean;
 }

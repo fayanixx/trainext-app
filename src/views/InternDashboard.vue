@@ -1,1310 +1,728 @@
+<script setup lang="ts">
+import { ref, onMounted, computed, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/stores/auth';
+import { useAttendanceStore } from '@/stores/attendance';
+import { useAccomplishmentsStore } from '@/stores/accomplishments';
+import { useGeolocation } from '@/composables/useGeolocation';
+import { validateGeofence, type GeofenceValidationResult } from '@/lib/geofence';
+import type { CompanySite, InternSupervisorLink, AccomplishmentLog } from '@/types';
+import GeofenceErrorModal from '@/components/GeofenceErrorModal.vue';
+import SafeAtBaseModal from '@/components/SafeAtBaseModal.vue';
+import AccomplishmentModal from '@/components/AccomplishmentModal.vue';
+import ProofViewerModal from '@/components/ProofViewerModal.vue';
+
+const router = useRouter();
+const authStore = useAuthStore();
+const attendanceStore = useAttendanceStore();
+const accomplishmentsStore = useAccomplishmentsStore();
+const { coordinates, loading: geoLoading, error: geoError, refreshLocation } = useGeolocation();
+
+// Dashboard & Affiliation States
+const loading = ref(true);
+const linkRecord = ref<InternSupervisorLink | null>(null);
+const assignedCompany = ref<CompanySite | null>(null);
+const availableCompanies = ref<CompanySite[]>([]);
+const selectedCompanyId = ref<string>('');
+const isSubmittingRequest = ref(false);
+const alertMessage = ref('');
+const errorMessage = ref('');
+
+// DTR, Geofence, & Safe at Base States
+const geofenceResult = ref<GeofenceValidationResult | null>(null);
+const isGeofenceErrorOpen = ref(false);
+const isSafeAtBaseModalOpen = ref(false);
+const actionLoading = ref(false);
+
+// Accomplishment Modals & Viewer States
+const isAccomplishmentModalOpen = ref(false);
+const editingAccomplishment = ref<AccomplishmentLog | null>(null);
+const isProofViewerOpen = ref(false);
+const activeProofUrl = ref<string | null>(null);
+const activeProofType = ref<'image' | 'document' | 'video' | null>(null);
+const activeProofTitle = ref('');
+
+// Affiliation Status Flags
+const isApproved = computed(() => linkRecord.value?.status === 'approved');
+const isPending = computed(() => linkRecord.value?.status === 'pending');
+const isRejected = computed(() => linkRecord.value?.status === 'rejected');
+
+// Evaluate Geofence status
+const evaluateGeofence = () => {
+  if (!coordinates.value || !assignedCompany.value) {
+    geofenceResult.value = null;
+    return;
+  }
+
+  const officeCoords = {
+    latitude: assignedCompany.value.latitude,
+    longitude: assignedCompany.value.longitude,
+  };
+
+  geofenceResult.value = validateGeofence(
+    coordinates.value,
+    officeCoords,
+    assignedCompany.value.radius_meters || 150
+  );
+};
+
+watch([coordinates, assignedCompany], () => {
+  evaluateGeofence();
+});
+
+// Fetch Available Supervisors with Active Company Sites
+const fetchAvailableCompanies = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('company_sites')
+      .select('*');
+
+    if (error) throw error;
+    availableCompanies.value = (data as CompanySite[]) || [];
+  } catch (err: any) {
+    console.error('Failed to load companies:', err.message);
+  }
+};
+
+// Fetch Current Intern Link & Company Details
+const fetchInternLinkStatus = async () => {
+  if (!authStore.user?.id) return;
+
+  try {
+    const { data, error } = await supabase
+      .from('intern_supervisor_links')
+      .select(`
+        id,
+        intern_id,
+        supervisor_id,
+        status,
+        rejection_reason,
+        linked_at,
+        created_at
+      `)
+      .eq('intern_id', authStore.user.id)
+      .maybeSingle();
+
+    if (error) throw error;
+    linkRecord.value = (data as InternSupervisorLink) || null;
+
+    if (linkRecord.value?.status === 'approved') {
+      const { data: siteData, error: siteError } = await supabase
+        .from('company_sites')
+        .select('*')
+        .eq('supervisor_id', linkRecord.value.supervisor_id)
+        .maybeSingle();
+
+      if (!siteError && siteData) {
+        assignedCompany.value = siteData as CompanySite;
+      }
+    }
+  } catch (err: any) {
+    console.error('Failed to fetch link status:', err.message);
+  } finally {
+    loading.value = false;
+  }
+};
+
+// Send Smart Link Request
+const submitLinkRequest = async () => {
+  if (!selectedCompanyId.value) {
+    errorMessage.value = 'Please select a company and supervisor from the list.';
+    return;
+  }
+
+  const selectedSite = availableCompanies.value.find((c) => c.id === selectedCompanyId.value);
+  if (!selectedSite) return;
+
+  isSubmittingRequest.value = true;
+  errorMessage.value = '';
+  alertMessage.value = '';
+
+  try {
+    const payload = {
+      intern_id: authStore.user!.id,
+      supervisor_id: selectedSite.supervisor_id,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+
+    const { data, error } = await supabase
+      .from('intern_supervisor_links')
+      .upsert(payload, { onConflict: 'intern_id' })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    linkRecord.value = data as InternSupervisorLink;
+    alertMessage.value = 'Affiliation request dispatched! Waiting for supervisor approval.';
+  } catch (err: any) {
+    errorMessage.value = err.message || 'Failed to dispatch supervisor affiliation request.';
+  } finally {
+    isSubmittingRequest.value = false;
+  }
+};
+
+// Execute Geofenced Time-In
+const handleTimeIn = async () => {
+  errorMessage.value = '';
+
+  if (!coordinates.value || !assignedCompany.value) {
+    errorMessage.value = 'Waiting for valid device GPS coordinates...';
+    return;
+  }
+
+  evaluateGeofence();
+  if (!geofenceResult.value?.isInside) {
+    isGeofenceErrorOpen.value = true;
+    return;
+  }
+
+  actionLoading.value = true;
+  try {
+    await attendanceStore.logTimeIn({
+      internId: authStore.user!.id,
+      supervisorId: assignedCompany.value.supervisor_id,
+      latitude: coordinates.value.latitude,
+      longitude: coordinates.value.longitude,
+    });
+    alertMessage.value = 'Successfully clocked in! You are currently on duty.';
+  } catch (err: any) {
+    errorMessage.value = err.message || 'Failed to record Time-In.';
+  } finally {
+    actionLoading.value = false;
+  }
+};
+
+// Execute Time-Out
+const handleTimeOut = async () => {
+  actionLoading.value = true;
+  errorMessage.value = '';
+  alertMessage.value = '';
+
+  try {
+    await attendanceStore.logTimeOut();
+    alertMessage.value = 'Successfully clocked out! Your status is now "In Transit" until you reach your home base.';
+  } catch (err: any) {
+    errorMessage.value = err.message || 'Failed to record Time-Out.';
+  } finally {
+    actionLoading.value = false;
+  }
+};
+
+// Execute Safe at Base Check-in
+const handleConfirmSafeAtBase = async () => {
+  actionLoading.value = true;
+  errorMessage.value = '';
+  alertMessage.value = '';
+
+  try {
+    await attendanceStore.confirmSafeAtBase();
+    isSafeAtBaseModalOpen.value = false;
+    alertMessage.value = 'Safe arrival recorded! Transit monitoring for this shift has concluded.';
+  } catch (err: any) {
+    errorMessage.value = err.message || 'Failed to record Safe at Base status.';
+  } finally {
+    actionLoading.value = false;
+  }
+};
+
+// Accomplishment Actions
+const openCreateAccomplishment = () => {
+  editingAccomplishment.value = null;
+  isAccomplishmentModalOpen.value = true;
+};
+
+const openEditAccomplishment = (log: AccomplishmentLog) => {
+  editingAccomplishment.value = log;
+  isAccomplishmentModalOpen.value = true;
+};
+
+const handleDeleteAccomplishment = async (id: string) => {
+  if (!confirm('Are you sure you want to delete this pending accomplishment record?')) return;
+  try {
+    await accomplishmentsStore.deleteLog(id);
+    alertMessage.value = 'Accomplishment record removed successfully.';
+  } catch (err: any) {
+    errorMessage.value = err.message || 'Failed to remove accomplishment.';
+  }
+};
+
+const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: string) => {
+  activeProofUrl.value = url;
+  activeProofType.value = type;
+  activeProofTitle.value = title;
+  isProofViewerOpen.value = true;
+};
+
+onMounted(async () => {
+  await authStore.fetchProfile();
+  if (!authStore.isAuthenticated || !authStore.isIntern || !authStore.user) {
+    router.push('/auth');
+    return;
+  }
+
+  await Promise.all([
+    fetchInternLinkStatus(),
+    fetchAvailableCompanies(),
+    attendanceStore.fetchTodayShift(authStore.user.id),
+    accomplishmentsStore.fetchInternLogs(authStore.user.id),
+  ]);
+});
+</script>
+
 <template>
-  <ion-page>
-    <AppHeader subtitle="Intern dashboard" />
+  <div class="min-h-screen bg-[#0a0f1d] text-slate-100 p-4 sm:p-8 relative overflow-hidden select-none">
+    <!-- Ambient Neon Cyberpunk Glow Backdrops -->
+    <div class="absolute -top-40 -left-40 w-96 h-96 bg-cyan-500/10 rounded-full blur-[140px] pointer-events-none"></div>
+    <div class="absolute top-1/2 -right-40 w-96 h-96 bg-fuchsia-500/10 rounded-full blur-[140px] pointer-events-none"></div>
 
-    <ion-content :fullscreen="true" class="dashboard-content" style="--background: transparent">
-      <!-- Fixed Background Layer (Subway platform na may dark vignette) -->
-      <div class="fixed inset-0 bg-[#020611] -z-10 overflow-hidden flex items-center justify-center pointer-events-none select-none">
-        <img
-          src="/assets/bg-placeholder.png"
-          alt="Platform Background"
-          class="w-full h-full object-cover object-center brightness-[0.70] contrast-[1.15]"
-        />
-        <div class="absolute inset-0 bg-gradient-to-b from-[#020611]/60 via-[#020611]/30 to-[#020611]/90"></div>
-        <div class="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(0,194,255,0.12)_0%,transparent_60%)]"></div>
-      </div>
-
-      <!-- Pull to Refresh -->
-      <ion-refresher slot="fixed" @ionRefresh="handleRefresh">
-        <ion-refresher-content />
-      </ion-refresher>
-
-      <!-- Main Responsive Grid / Container -->
-      <div class="mx-auto max-w-4xl space-y-6 px-3.5 sm:px-6 py-6 font-aileron selection:bg-[#00C2FF] selection:text-black">
-        
-        <!-- Loading State -->
-        <div v-if="!profile" class="trainext-glass-card text-center py-12">
-          <ion-spinner name="crescent" class="text-[#00C2FF] mb-3 w-8 h-8 mx-auto" />
-          <p class="text-sm font-semibold text-slate-300">Loading your intern profile…</p>
+    <div class="max-w-5xl mx-auto space-y-6 relative z-10">
+      
+      <!-- Top Dynamic Header Bar -->
+      <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-3xl bg-[#0d1527]/80 border border-cyan-500/25 backdrop-blur-2xl shadow-[0_0_35px_rgba(6,182,212,0.12)]">
+        <div>
+          <div class="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-cyan-500/15 border border-cyan-400/40 text-[10px] font-bold text-cyan-300 uppercase tracking-widest mb-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping"></span>
+            Intern Portal
+          </div>
+          <h1 class="text-xl sm:text-2xl font-black text-white tracking-wide">
+            Welcome, {{ authStore.user?.full_name || 'Trainee' }}
+          </h1>
+          <p class="text-xs text-slate-400">
+            {{ isApproved ? (assignedCompany?.company_name || 'Assigned Company') : 'Account Onboarding & Smart Linking' }}
+          </p>
         </div>
 
-        <template v-else>
-          <!-- Verification Component -->
-          <InternVerificationCard />
+        <div class="flex items-center gap-3">
+          <button 
+            @click="authStore.signOut(); router.push('/auth');"
+            class="px-4 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition"
+          >
+            Sign Out
+          </button>
+        </div>
+      </header>
 
-          <!-- Locked Features Notice -->
-          <div v-if="!auth.isFullyVerified" class="trainext-glass-card border-rose-500/30">
-            <div class="flex items-start gap-3.5">
-              <div class="p-2.5 rounded-2xl bg-rose-500/10 text-rose-400 shrink-0">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                </svg>
-              </div>
-              <div>
-                <h3 class="card-title text-white">OJT Features are Locked</h3>
-                <p class="card-subtitle text-slate-400 mt-1">
-                  Both your school coordinator and company supervisor must approve your placement.
-                </p>
-              </div>
-            </div>
+      <!-- Loading State -->
+      <div v-if="loading" class="p-12 text-center text-slate-400 text-sm animate-pulse">
+        Synchronizing trainee records, geofence, and accomplishment logs...
+      </div>
 
-            <div class="flex flex-wrap gap-2.5 mt-4">
-              <div class="badge-pill" :class="statusBadgeClass(profile.enrollment_status)">
-                School Enrollment: {{ profile.enrollment_status }}
-              </div>
-              <div class="badge-pill" :class="statusBadgeClass(profile.deployment_status)">
-                Company Deployment: {{ profile.deployment_status }}
-              </div>
-            </div>
+      <!-- STATE 1: ONBOARDING / PENDING SUPERVISOR LINK -->
+      <section v-else-if="!isApproved" class="space-y-6">
+        <div v-if="isPending" class="p-6 rounded-3xl bg-amber-950/40 border border-amber-500/40 backdrop-blur-xl space-y-2">
+          <div class="flex items-center gap-2 text-amber-300 font-bold text-sm">
+            <span>⏳</span>
+            <span>Supervisor Approval Pending</span>
+          </div>
+          <p class="text-xs text-slate-300 leading-relaxed">
+            Your request has been routed to your supervisor. Once accepted, your office geofence perimeter coordinates will unlock automatically to permit Time In, Time Out, and Accomplishment submissions.
+          </p>
+        </div>
 
-            <p class="mt-4 text-xs font-regular text-slate-400/80 leading-relaxed">
-              Geofenced attendance, accomplishment proofs, and safe-at-base confirmation become available once both verifications are approved.
+        <div v-if="isRejected" class="p-6 rounded-3xl bg-red-950/40 border border-red-500/40 backdrop-blur-xl space-y-2">
+          <div class="flex items-center gap-2 text-red-300 font-bold text-sm">
+            <span>✕</span>
+            <span>Affiliation Request Declined</span>
+          </div>
+          <p class="text-xs text-slate-300 leading-relaxed">
+            Your request was declined. <span v-if="linkRecord?.rejection_reason" class="text-red-300">Reason: "{{ linkRecord.rejection_reason }}"</span>. Please select and re-apply below.
+          </p>
+        </div>
+
+        <!-- Smart Link Request Card -->
+        <div class="p-6 sm:p-8 rounded-3xl bg-[#0d1527]/90 border border-cyan-500/30 backdrop-blur-2xl shadow-[0_0_40px_rgba(6,182,212,0.15)] space-y-5">
+          <div>
+            <h2 class="text-lg font-bold text-white tracking-wide">
+              Connect to Company & Supervisor
+            </h2>
+            <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+              Select your assigned host training company below. Your supervisor will approve your account to unlock geofenced attendance logging.
             </p>
           </div>
 
-          <!-- Verified Section -->
-          <template v-if="auth.isFullyVerified">
-            <!-- Awaiting Site Card -->
-            <div v-if="!site" class="trainext-glass-card border-amber-500/30">
-              <div class="flex items-center gap-3">
-                <div class="p-2.5 rounded-2xl bg-amber-500/10 text-amber-400">
-                  <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 class="card-title text-white">Awaiting Site Assignment</h3>
-                  <p class="card-subtitle text-slate-400 mt-0.5">Supervisor review pending</p>
-                </div>
-              </div>
-              <p class="mt-4 text-xs text-slate-300 leading-relaxed font-regular">
-                Your supervisor has verified your deployment but has not assigned you to a company site yet. Once assigned, the live geofence map and attendance controls will appear here.
+          <div v-if="alertMessage" class="p-3.5 rounded-xl bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-300 font-medium">
+            {{ alertMessage }}
+          </div>
+          <div v-if="errorMessage" class="p-3.5 rounded-xl bg-red-950/60 border border-red-500/40 text-xs text-red-300 font-medium">
+            {{ errorMessage }}
+          </div>
+
+          <div class="space-y-1.5">
+            <label class="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+              Available Training Companies
+            </label>
+            <div v-if="availableCompanies.length === 0" class="p-4 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400">
+              No registered company sites available yet.
+            </div>
+            <select 
+              v-else 
+              v-model="selectedCompanyId"
+              class="w-full px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-800 text-slate-100 text-sm focus:border-cyan-400 outline-none transition"
+            >
+              <option disabled value="">-- Select Company & Office Location --</option>
+              <option v-for="site in availableCompanies" :key="site.id" :value="site.id">
+                {{ site.company_name }} ({{ site.office_address }})
+              </option>
+            </select>
+          </div>
+
+          <button 
+            @click="submitLinkRequest"
+            :disabled="isSubmittingRequest || !selectedCompanyId"
+            class="w-full py-3.5 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 hover:from-cyan-400 text-white font-bold text-xs uppercase tracking-wider shadow-lg disabled:opacity-40 transition"
+          >
+            {{ isSubmittingRequest ? 'Submitting Affiliation Request...' : (isPending ? 'Re-Submit Request' : 'Send Request to Supervisor') }}
+          </button>
+        </div>
+      </section>
+
+      <!-- STATE 2: AUTHORIZED INTERN (DTR & ACCOMPLISHMENTS UNLOCKED) -->
+      <section v-else class="space-y-6">
+        
+        <!-- Alerts & Feedbacks -->
+        <div v-if="alertMessage" class="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-300 font-medium flex items-center justify-between">
+          <span>{{ alertMessage }}</span>
+          <button @click="alertMessage = ''" class="text-slate-400 hover:text-white font-bold ml-4">✕</button>
+        </div>
+        <div v-if="errorMessage" class="p-4 rounded-2xl bg-red-950/60 border border-red-500/40 text-xs text-red-300 font-medium flex items-center justify-between">
+          <span>{{ errorMessage }}</span>
+          <button @click="errorMessage = ''" class="text-slate-400 hover:text-white font-bold ml-4">✕</button>
+        </div>
+        <div v-if="geoError" class="p-4 rounded-2xl bg-amber-950/60 border border-amber-500/40 text-xs text-amber-300 font-medium">
+          {{ geoError }}
+        </div>
+
+        <!-- 1. LIVE IN TRANSIT CALLOUT BANNER -->
+        <div 
+          v-if="attendanceStore.isInTransit" 
+          class="p-6 rounded-3xl bg-[#0d1527]/90 border border-amber-500/40 backdrop-blur-2xl shadow-[0_0_40px_rgba(245,158,11,0.2)] flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+        >
+          <div class="space-y-1">
+            <div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold uppercase tracking-wider border border-amber-500/40">
+              <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
+              In Transit Monitoring Active
+            </div>
+            <h3 class="text-lg font-bold text-white">Heading Home or to Dorm?</h3>
+            <p class="text-xs text-slate-300 leading-relaxed max-w-xl">
+              Your shift has ended and transit safety tracking is currently active. Confirm your arrival once at your residence to conclude daily accountability.
+            </p>
+          </div>
+
+          <button 
+            @click="isSafeAtBaseModalOpen = true"
+            :disabled="actionLoading"
+            class="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-600 to-emerald-600 hover:from-emerald-400 text-slate-950 font-black text-xs uppercase tracking-wider shadow-[0_0_30px_rgba(16,185,129,0.35)] shrink-0 transition"
+          >
+            I Am Safe at Base 🛡️
+          </button>
+        </div>
+
+        <!-- 2. SAFE AT BASE RECEIPT BANNER -->
+        <div 
+          v-else-if="attendanceStore.isSafeAtBase"
+          class="p-5 rounded-3xl bg-emerald-950/40 border border-emerald-500/40 backdrop-blur-2xl flex items-center justify-between gap-4"
+        >
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center text-emerald-300 text-lg">
+              ✓
+            </div>
+            <div>
+              <h4 class="text-sm font-bold text-white">Safe at Base Validated</h4>
+              <p class="text-[11px] text-slate-300">
+                Digital arrival receipt logged at {{ new Date(attendanceStore.activeShift?.safe_at_base_time || '').toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}. Transit accountability concluded.
+              </p>
+            </div>
+          </div>
+          <span class="text-[10px] font-mono text-emerald-300 bg-slate-900/80 px-3 py-1.5 rounded-xl border border-slate-800">
+            Receipt #{{ attendanceStore.activeShift?.id.slice(0, 8) }}
+          </span>
+        </div>
+
+        <!-- 3. LIVE SHIFT STATUS RIBBON -->
+        <div class="p-6 rounded-3xl bg-[#0d1527]/85 border border-cyan-500/30 backdrop-blur-2xl shadow-[0_0_35px_rgba(6,182,212,0.12)] space-y-4">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+                Daily Shift Controller
+              </span>
+              <h2 class="text-xl font-black text-white mt-0.5">
+                <span v-if="attendanceStore.isOnDuty" class="text-cyan-400">On Duty (Rendering Hours)</span>
+                <span v-else-if="attendanceStore.isInTransit" class="text-amber-400">In Transit (Heading Home)</span>
+                <span v-else-if="attendanceStore.isSafeAtBase" class="text-emerald-400">Safe at Base (Shift Completed)</span>
+                <span v-else class="text-slate-300">Ready to Clock In</span>
+              </h2>
+              <p class="text-xs text-slate-400 mt-1">
+                Assigned Site: {{ assignedCompany?.company_name }} ({{ assignedCompany?.office_address }})
               </p>
             </div>
 
-            <!-- Active Geofence & Map View -->
-            <template v-else>
-              <div class="trainext-glass-card">
-                <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-                  <div class="flex items-center gap-3">
-                    <div class="p-2.5 rounded-2xl bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/20">
-                      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                      </svg>
-                    </div>
-                    <div>
-                      <h3 class="card-title text-white">{{ site.name }}</h3>
-                      <p class="card-subtitle text-[#00C2FF]">
-                        {{ site.address || 'Company site' }} · {{ site.radius_meters.toFixed(1) }}m radius
-                      </p>
-                    </div>
-                  </div>
-                  <div class="badge-pill" :class="site.is_active ? 'badge-pill-success' : 'badge-pill-danger'">
-                    {{ site.is_active ? 'Active Site' : 'Inactive Site' }}
-                  </div>
+            <!-- Geofence Proximity Badge -->
+            <div class="flex items-center gap-2 p-3 rounded-2xl bg-slate-900/80 border border-slate-800 text-xs">
+              <span 
+                class="w-2.5 h-2.5 rounded-full"
+                :class="geofenceResult?.isInside ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)]' : 'bg-red-400 shadow-[0_0_10px_rgba(248,113,113,0.8)]'"
+              ></span>
+              <div class="text-left font-mono">
+                <div class="text-[10px] text-slate-400 font-sans">Office Distance</div>
+                <div :class="geofenceResult?.isInside ? 'text-emerald-300' : 'text-red-300'" class="font-bold">
+                  {{ geofenceResult?.formattedDistance || 'Calculating...' }}
                 </div>
-
-                <div class="rounded-2xl overflow-hidden border border-white/20 shadow-inner">
-                  <GeofenceMap :site="site" height="340px" />
-                </div>
-
-                <p v-if="!site.is_active" class="mt-3 text-xs text-rose-400 font-semibold">
-                  This site is currently inactive. Clock-in is disabled until your supervisor re-enables it.
-                </p>
-              </div>
-
-              <!-- Live Attendance & Punch Clock Card -->
-              <div class="trainext-glass-card">
-                <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-                  <div class="flex items-center gap-3">
-                    <div class="p-2.5 rounded-2xl bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/20">
-                      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                      </svg>
-                    </div>
-                    <div>
-                      <h3 class="card-title text-white">Attendance Radar</h3>
-                      <p class="card-subtitle text-slate-400">Clock in and out from inside the site geofence</p>
-                    </div>
-                  </div>
-
-                  <!-- Geofence & GPS Status Pills -->
-                  <div class="flex flex-wrap items-center gap-2">
-                    <div class="badge-pill" :class="inside ? 'badge-pill-success' : 'badge-pill-danger'">
-                      <span class="w-2 h-2 rounded-full mr-1.5" :class="inside ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'"></span>
-                      {{ inside ? 'Inside Geofence' : 'Outside Geofence' }}
-                    </div>
-                    <div class="badge-pill badge-pill-slate">
-                      {{ distanceLabel }}
-                    </div>
-                    <div v-if="position?.accuracy" class="badge-pill badge-pill-cyan">
-                      GPS ±{{ position.accuracy.toFixed(1) }}m
-                    </div>
-                    <div v-if="!position" class="badge-pill badge-pill-amber">
-                      Locating GPS…
-                    </div>
-                  </div>
-                </div>
-
-                <p v-if="geoError" class="mt-2 text-xs text-rose-400 font-semibold">{{ geoError }}</p>
-
-                <!-- Ongoing Active Shift -->
-                <div v-if="attendance.openLog" class="mt-5 rounded-2xl bg-[#061024]/70 border border-[#00C2FF]/30 p-5 backdrop-blur-md">
-                  <div class="flex items-center justify-between">
-                    <div>
-                      <p class="text-[10px] font-heavy uppercase tracking-widest text-slate-400">Shift Started</p>
-                      <p class="text-sm font-semibold text-white mt-0.5">
-                        {{ formatDateTime(attendance.openLog.clock_in_at) }}
-                      </p>
-                    </div>
-                    <span class="badge-pill badge-pill-cyan uppercase text-[10px]">On-Duty</span>
-                  </div>
-
-                  <!-- Digital Timer Display -->
-                  <div class="my-5 text-center">
-                    <p class="text-4xl md:text-5xl font-heavy tracking-wider text-[#00C2FF] drop-shadow-[0_0_15px_rgba(0,194,255,0.4)]">
-                      {{ elapsedLabel }}
-                    </p>
-                    <p class="text-[10px] uppercase tracking-widest text-slate-400 mt-1">Elapsed Time Rendered</p>
-                  </div>
-
-                  <button
-                    type="button"
-                    class="pill-btn btn-danger-gradient w-full flex items-center justify-center gap-2"
-                    :disabled="attendance.loading || !position"
-                    @click="confirmClockOut"
-                  >
-                    <ion-spinner v-if="attendance.loading" name="crescent" class="w-4 h-4 text-white" />
-                    CLOCK OUT NOW
-                  </button>
-                </div>
-
-                <!-- Ready to Clock In -->
-                <div v-else class="mt-5">
-                  <button
-                    type="button"
-                    class="pill-btn btn-gradient-cyan w-full flex items-center justify-center gap-2"
-                    :disabled="!canClockIn || attendance.loading"
-                    @click="clockIn"
-                  >
-                    <ion-spinner v-if="attendance.loading" name="crescent" class="w-4 h-4 text-black" />
-                    CLOCK IN
-                  </button>
-                  <p class="mt-3 text-center text-[11px] text-slate-400 font-regular">
-                    Clock-in is accepted only while your live position is strictly inside the {{ site.radius_meters.toFixed(1) }}m site radius.
-                  </p>
-                </div>
-              </div>
-            </template>
-
-            <!-- Safety Component -->
-            <SafeAtBaseCard :open-log="Boolean(attendance.openLog)" />
-          </template>
-
-          <!-- OJT Hours Progress Card -->
-          <div class="trainext-glass-card">
-            <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
-              <div class="flex items-center gap-3">
-                <div class="p-2.5 rounded-2xl bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/20">
-                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 class="card-title text-white">OJT Hours Progress</h3>
-                  <p class="card-subtitle text-slate-400">Approved attendance counts toward required hours</p>
-                </div>
-              </div>
-              <div class="text-right">
-                <span class="text-2xl font-heavy text-white">{{ approvedHoursLabel }}</span>
-                <span class="text-xs text-slate-400 font-bold"> / {{ requiredHoursLabel }} hrs</span>
-              </div>
-            </div>
-
-            <!-- Glowing Cyan Progress Bar -->
-            <div class="w-full h-3 rounded-full bg-slate-800/80 overflow-hidden border border-white/10 p-0.5 my-3">
-              <div
-                class="h-full rounded-full bg-gradient-to-r from-[#A5F3FC] via-[#00C2FF] to-[#38BDF8] shadow-[0_0_12px_#00C2FF] transition-all duration-500"
-                :style="{ width: `${Math.min(progressRatio * 100, 100)}%` }"
-              ></div>
-            </div>
-
-            <!-- Responsive Stat Counters -->
-            <div class="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <div class="stat-tile">
-                <p class="stat-label">Approved</p>
-                <p class="stat-value text-emerald-400">{{ approvedHoursLabel }}</p>
-              </div>
-              <div class="stat-tile">
-                <p class="stat-label">Pending</p>
-                <p class="stat-value text-amber-400">{{ pendingHoursLabel }}</p>
-              </div>
-              <div class="stat-tile">
-                <p class="stat-label">Remaining</p>
-                <p class="stat-value text-slate-200">{{ remainingHoursLabel }}</p>
-              </div>
-              <div class="stat-tile">
-                <p class="stat-label">Progress</p>
-                <p class="stat-value text-[#00C2FF]">{{ progressPercentLabel }}</p>
               </div>
             </div>
           </div>
 
-          <!-- Attendance History Card -->
-          <div class="trainext-glass-card">
-            <div class="flex items-center gap-3 mb-4">
-              <div class="p-2.5 rounded-2xl bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/20">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-              <div>
-                <h3 class="card-title text-white">Attendance History</h3>
-                <p class="card-subtitle text-slate-400">Supervisor approvals and verification logs</p>
-              </div>
+          <!-- Time-In & Time-Out Action Controls -->
+          <div class="pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-center gap-3">
+            <button 
+              v-if="!attendanceStore.isOnDuty && !attendanceStore.isInTransit && !attendanceStore.isSafeAtBase"
+              @click="handleTimeIn"
+              :disabled="actionLoading || geoLoading"
+              class="w-full sm:flex-1 py-4 rounded-2xl bg-gradient-to-r from-cyan-500 via-blue-600 to-cyan-600 hover:from-cyan-400 text-white font-extrabold text-sm uppercase tracking-wider shadow-[0_0_30px_rgba(6,182,212,0.35)] disabled:opacity-40 transition"
+            >
+              {{ actionLoading ? 'Verifying Coordinates...' : 'Clock In (Geofenced)' }}
+            </button>
+
+            <button 
+              v-if="attendanceStore.isOnDuty"
+              @click="handleTimeOut"
+              :disabled="actionLoading"
+              class="w-full sm:flex-1 py-4 rounded-2xl bg-gradient-to-r from-amber-500 to-rose-600 hover:from-amber-400 text-white font-extrabold text-sm uppercase tracking-wider shadow-[0_0_30px_rgba(245,158,11,0.35)] disabled:opacity-40 transition"
+            >
+              {{ actionLoading ? 'Clocking Out...' : 'Clock Out (Start Transit)' }}
+            </button>
+
+            <button 
+              @click="refreshLocation"
+              class="w-full sm:w-auto px-4 py-4 rounded-2xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-xs font-semibold text-slate-300 hover:text-white transition flex items-center justify-center gap-1.5"
+            >
+              <span>🔄</span>
+              <span>Refresh Location</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 4. SHIFT SUMMARY METRICS -->
+        <div v-if="attendanceStore.activeShift" class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div class="p-4 rounded-2xl bg-[#0d1527]/80 border border-slate-800/80 backdrop-blur-xl">
+            <span class="text-[10px] font-bold text-slate-400 uppercase">Shift Date</span>
+            <div class="text-sm font-semibold text-white mt-1">{{ attendanceStore.activeShift.date }}</div>
+          </div>
+          <div class="p-4 rounded-2xl bg-[#0d1527]/80 border border-slate-800/80 backdrop-blur-xl">
+            <span class="text-[10px] font-bold text-slate-400 uppercase">Clock In</span>
+            <div class="text-sm font-semibold text-cyan-300 font-mono mt-1">
+              {{ new Date(attendanceStore.activeShift.time_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}
+            </div>
+          </div>
+          <div class="p-4 rounded-2xl bg-[#0d1527]/80 border border-slate-800/80 backdrop-blur-xl">
+            <span class="text-[10px] font-bold text-slate-400 uppercase">Clock Out</span>
+            <div class="text-sm font-semibold text-amber-300 font-mono mt-1">
+              {{ attendanceStore.activeShift.time_out ? new Date(attendanceStore.activeShift.time_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Pending' }}
+            </div>
+          </div>
+          <div class="p-4 rounded-2xl bg-[#0d1527]/80 border border-slate-800/80 backdrop-blur-xl">
+            <span class="text-[10px] font-bold text-slate-400 uppercase">Rendered</span>
+            <div class="text-sm font-bold text-emerald-400 font-mono mt-1">
+              {{ attendanceStore.activeShift.hours_rendered }} hrs
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. ACCOMPLISHMENTS SECTION WITH MULTI-PROOF SUPPORT -->
+        <section class="space-y-4 pt-4">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 class="text-lg font-bold text-white tracking-wide flex items-center gap-2">
+                <span>Accomplishment Logs</span>
+                <span class="px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-mono">
+                  {{ accomplishmentsStore.logs.length }}
+                </span>
+              </h2>
+              <p class="text-xs text-slate-400">
+                Submit and manage task achievements with attached screenshots, documents, and videos
+              </p>
             </div>
 
-            <p v-if="!attendance.logs.length" class="text-center py-6 text-xs text-slate-400 font-regular">
-              No attendance logs recorded yet.
+            <button 
+              @click="openCreateAccomplishment"
+              class="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 text-white font-bold text-xs uppercase tracking-wider shadow-[0_0_20px_rgba(6,182,212,0.3)] transition flex items-center justify-center gap-2 self-start sm:self-auto"
+            >
+              <span>+</span>
+              <span>New Accomplishment</span>
+            </button>
+          </div>
+
+          <!-- Empty State -->
+          <div 
+            v-if="accomplishmentsStore.logs.length === 0" 
+            class="p-10 rounded-3xl bg-[#0d1527]/60 border border-slate-800/80 text-center space-y-2"
+          >
+            <div class="text-3xl">📋</div>
+            <p class="text-sm font-semibold text-slate-300">No accomplishment reports logged yet.</p>
+            <p class="text-xs text-slate-500 max-w-sm mx-auto">
+              Start documenting your daily deliverables, development progress, and tasks for supervisor verification.
             </p>
-
-            <div v-else class="space-y-3">
-              <div
-                v-for="log in attendance.logs"
-                :key="log.id"
-                class="history-row"
-              >
-                <div class="flex-1">
-                  <div class="flex items-center justify-between">
-                    <h4 class="text-sm font-heavy text-white">{{ formatDate(log.clock_in_at) }}</h4>
-                    <span class="badge-pill text-[10px]" :class="statusBadgeClass(log.status)">
-                      {{ log.status }}
-                    </span>
-                  </div>
-                  <p class="text-xs text-slate-300 mt-1 font-regular">
-                    In: <strong class="text-white">{{ formatTime(log.clock_in_at) }}</strong> · Out: 
-                    <strong class="text-white">{{ log.clock_out_at ? formatTime(log.clock_out_at) : 'In Progress' }}</strong>
-                  </p>
-                  <p class="text-[11px] text-slate-400 mt-0.5">
-                    Hours: <span class="text-[#00C2FF] font-bold">{{ Number(log.hours_rendered).toFixed(2) }}</span> · 
-                    Coords: {{ log.clock_in_latitude.toFixed(4) }}, {{ log.clock_in_longitude.toFixed(4) }}
-                  </p>
-                  <p v-if="log.feedback" class="text-xs text-cyan-200 mt-1.5 p-2 rounded-lg bg-cyan-950/30 border border-cyan-800/40">
-                    Feedback: {{ log.feedback }}
-                  </p>
-                </div>
-              </div>
-            </div>
           </div>
 
-          <!-- Submit Daily Accomplishment Card -->
-          <div class="trainext-glass-card">
-            <div class="flex items-center gap-3 mb-5">
-              <div class="p-2.5 rounded-2xl bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/20">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-              </div>
-              <div>
-                <h3 class="card-title text-white">Daily Accomplishment Report</h3>
-                <p class="card-subtitle text-slate-400">Attach proof files, accomplishments, and activity summaries</p>
-              </div>
-            </div>
-
-            <template v-if="auth.isFullyVerified">
-              <form @submit.prevent="submitReport" class="space-y-4">
+          <!-- Accomplishments List Grid -->
+          <div v-else class="space-y-4">
+            <div 
+              v-for="log in accomplishmentsStore.logs" 
+              :key="log.id"
+              class="p-6 rounded-3xl bg-[#0d1527]/90 border border-slate-800/80 hover:border-cyan-500/30 backdrop-blur-2xl shadow-lg transition space-y-4"
+            >
+              <!-- Card Header -->
+              <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-2">
                 <div>
-                  <label class="field-label">TASK TITLE</label>
-                  <div class="input-line-box">
-                    <svg class="text-[#00C2FF] w-4 h-4 mr-2.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    <input
-                      v-model="reportTitle"
-                      type="text"
-                      placeholder="e.g., Implemented geofence verification algorithm"
-                      class="field-input"
-                    />
-                  </div>
-                </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label class="field-label">REPORT DATE</label>
-                    <div class="input-line-box">
-                      <svg class="text-[#00C2FF] w-4 h-4 mr-2.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      <input
-                        v-model="reportDate"
-                        type="date"
-                        class="field-input text-slate-200"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label class="field-label">HOURS SPENT</label>
-                    <div class="input-line-box">
-                      <svg class="text-[#00C2FF] w-4 h-4 mr-2.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <input
-                        v-model="reportHours"
-                        type="number"
-                        min="0"
-                        max="24"
-                        step="0.25"
-                        placeholder="8"
-                        class="field-input"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label class="field-label">ACCOMPLISHED TASKS & LEARNINGS</label>
-                  <div class="textarea-box">
-                    <textarea
-                      v-model="reportTasks"
-                      rows="4"
-                      placeholder="Describe the tasks completed, technical obstacles solved, and key outputs..."
-                      class="field-textarea"
-                    ></textarea>
-                  </div>
-                </div>
-
-                <!-- Proof Attachments Box -->
-                <div class="rounded-2xl border border-dashed border-white/20 p-4 bg-white/[0.02]">
-                  <p class="text-xs font-heavy tracking-wider uppercase text-slate-300">Proof Attachments</p>
-                  <input
-                    ref="fileInput"
-                    type="file"
-                    multiple
-                    accept="image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,video/*"
-                    class="mt-2 block w-full text-xs text-slate-400 file:mr-3 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-heavy file:bg-cyan-950 file:text-[#00C2FF] file:cursor-pointer hover:file:bg-cyan-900"
-                    @change="handleFiles"
-                  />
-                  <p class="mt-1.5 text-[11px] text-slate-400">
-                    Images, PDFs, Docs, or Videos. Up to 5 files, 50MB each.
-                  </p>
-
-                  <div v-if="reportFiles.length" class="mt-3 flex flex-wrap gap-2">
-                    <div
-                      v-for="(file, index) in reportFiles"
-                      :key="`${file.name}-${index}`"
-                      class="badge-pill badge-pill-cyan flex items-center gap-1 cursor-pointer"
-                      @click="removeFile(index)"
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <h3 class="text-base font-bold text-white">{{ log.title }}</h3>
+                    <span 
+                      v-if="log.status === 'approved'"
+                      class="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold uppercase tracking-wider"
                     >
-                      <span>{{ file.name }}</span>
-                      <span class="text-rose-400 font-bold ml-1">×</span>
-                    </div>
-                  </div>
-
-                  <div class="mt-4">
-                    <label class="field-label">EXTERNAL PROOF LINKS (ONE PER LINE)</label>
-                    <div class="textarea-box mt-1">
-                      <textarea
-                        v-model="reportLinks"
-                        rows="2"
-                        placeholder="https://github.com/... or Google Drive link"
-                        class="field-textarea"
-                      ></textarea>
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  class="pill-btn btn-gradient-cyan w-full flex items-center justify-center gap-2 mt-4"
-                  :disabled="accomplishments.loading"
-                >
-                  <ion-spinner v-if="accomplishments.loading" name="crescent" class="w-4 h-4 text-black" />
-                  SUBMIT ACCOMPLISHMENT
-                </button>
-              </form>
-            </template>
-            <p v-else class="text-xs text-slate-400 font-regular">
-              Accomplishment submission unlocks after both verification approvals.
-            </p>
-          </div>
-
-          <!-- Accomplishment Reports List Card -->
-          <div class="trainext-glass-card">
-            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-              <div class="flex items-center gap-3">
-                <div class="p-2.5 rounded-2xl bg-[#00C2FF]/10 text-[#00C2FF] border border-[#00C2FF]/20">
-                  <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 class="card-title text-white">Submitted Reports</h3>
-                  <p class="card-subtitle text-slate-400">
-                    {{ accomplishments.approvedCount }} approved · {{ accomplishments.pendingCount }} pending · {{ accomplishments.proofCount }} file(s)
-                  </p>
-                </div>
-              </div>
-
-              <button
-                v-if="accomplishments.reports.length"
-                type="button"
-                class="pill-btn-outline"
-                @click="exportReports"
-              >
-                Export CSV
-              </button>
-            </div>
-
-            <p v-if="!accomplishments.reports.length" class="text-center py-6 text-xs text-slate-400 font-regular">
-              No accomplishment reports submitted yet.
-            </p>
-
-            <div v-else class="space-y-3">
-              <div
-                v-for="report in accomplishments.reports"
-                :key="report.id"
-                class="history-row flex flex-col md:flex-row md:items-center justify-between gap-3"
-              >
-                <div class="flex-1">
-                  <div class="flex items-center gap-2">
-                    <h4 class="text-sm font-heavy text-white">{{ report.title }}</h4>
-                    <span class="badge-pill text-[10px]" :class="statusBadgeClass(report.status)">
-                      {{ report.status }}
+                      Approved
                     </span>
-                  </div>
-                  <p class="text-xs text-[#00C2FF] font-semibold mt-0.5">
-                    {{ formatDate(report.report_date) }} · {{ Number(report.hours_spent).toFixed(2) }} hr(s)
-                  </p>
-                  <p class="text-xs text-slate-300 mt-1 whitespace-pre-line font-regular">
-                    {{ report.tasks }}
-                  </p>
-                  <p v-if="report.feedback" class="text-xs text-cyan-200 mt-1 p-2 rounded-lg bg-cyan-950/30 border border-cyan-800/40">
-                    Feedback: {{ report.feedback }}
-                  </p>
-
-                  <div v-if="report.proofs?.length" class="mt-2 flex flex-wrap gap-2">
-                    <span
-                      v-for="proof in report.proofs"
-                      :key="proof.id"
-                      class="badge-pill badge-pill-cyan text-[10px] cursor-pointer"
-                      @click="openProofs(report)"
+                    <span 
+                      v-else-if="log.status === 'rejected'"
+                      class="px-2.5 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/40 text-[10px] font-bold uppercase tracking-wider"
                     >
-                      📎 {{ proof.kind }}
+                      Needs Revision
                     </span>
+                    <span 
+                      v-else
+                      class="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold uppercase tracking-wider"
+                    >
+                      Pending Review
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-3 text-[11px] text-slate-400 mt-1">
+                    <span>Date: <strong class="text-slate-300 font-mono">{{ log.report_date }}</strong></span>
+                    <span>•</span>
+                    <span>Rendered: <strong class="text-cyan-400 font-mono">{{ log.rendered_hours }} hrs</strong></span>
                   </div>
                 </div>
 
-                <div class="flex items-center gap-2 shrink-0">
-                  <button
-                    v-if="report.proofs?.length"
-                    type="button"
-                    class="pill-btn-sm"
-                    @click="openProofs(report)"
+                <!-- Action Controls (Only available if still pending) -->
+                <div v-if="log.status === 'pending'" class="flex items-center gap-2">
+                  <button 
+                    @click="openEditAccomplishment(log)"
+                    class="px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition"
                   >
-                    View proofs
+                    Edit
                   </button>
-                  <button
-                    v-if="report.status === 'pending'"
-                    type="button"
-                    class="pill-btn-danger-sm"
-                    @click="removeReport(report.id)"
+                  <button 
+                    @click="handleDeleteAccomplishment(log.id)"
+                    class="px-3 py-1.5 rounded-xl bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-xs font-semibold text-red-400 hover:text-red-300 transition"
                   >
                     Delete
                   </button>
                 </div>
               </div>
+
+              <!-- Card Description -->
+              <p class="text-xs text-slate-300 leading-relaxed whitespace-pre-line">
+                {{ log.description }}
+              </p>
+
+              <!-- Supervisor Feedback Callout (if present) -->
+              <div 
+                v-if="log.feedback" 
+                class="p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 text-xs text-slate-300 space-y-1"
+              >
+                <span class="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">Supervisor Feedback</span>
+                <p class="italic text-slate-200">"{{ log.feedback }}"</p>
+              </div>
+
+              <!-- Multi-Proof Attachments Row -->
+              <div class="pt-3 border-t border-slate-800/60 flex flex-wrap items-center gap-3">
+                <!-- Screenshots / Photos -->
+                <div v-if="log.proof_images && log.proof_images.length > 0" class="flex items-center gap-2">
+                  <span class="text-[10px] font-bold uppercase text-slate-500">Images:</span>
+                  <div class="flex items-center gap-1.5">
+                    <button 
+                      v-for="(img, idx) in log.proof_images" 
+                      :key="idx"
+                      @click="inspectMedia(img, 'image', `${log.title} - Screenshot ${idx + 1}`)"
+                      class="w-9 h-9 rounded-xl overflow-hidden border border-cyan-500/30 hover:border-cyan-400 transition transform hover:scale-105 bg-slate-900"
+                    >
+                      <img :src="img" alt="Proof" class="w-full h-full object-cover" />
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Documents -->
+                <div v-if="log.proof_documents && log.proof_documents.length > 0" class="flex items-center gap-2">
+                  <span class="text-[10px] font-bold uppercase text-slate-500">Docs:</span>
+                  <div class="flex items-center gap-1.5">
+                    <button 
+                      v-for="(doc, idx) in log.proof_documents" 
+                      :key="idx"
+                      @click="inspectMedia(doc, 'document', `${log.title} - Document`)"
+                      class="px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-[11px] text-cyan-300 flex items-center gap-1 transition"
+                    >
+                      <span>📄</span>
+                      <span class="truncate max-w-[120px]">{{ doc.split('/').pop() }}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Video Walkthrough -->
+                <div v-if="log.video_url" class="flex items-center gap-2">
+                  <span class="text-[10px] font-bold uppercase text-slate-500">Video:</span>
+                  <button 
+                    @click="inspectMedia(log.video_url, 'video', `${log.title} - Video Walkthrough`)"
+                    class="px-3 py-1 rounded-lg bg-fuchsia-950/40 hover:bg-fuchsia-900/60 border border-fuchsia-500/40 text-[11px] font-semibold text-fuchsia-300 flex items-center gap-1.5 transition"
+                  >
+                    <span>▶</span>
+                    <span>Watch Walkthrough</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        </template>
-      </div>
+        </section>
 
-      <!-- Modals and Toasts -->
-      <ProofViewerModal
-        :is-open="viewerOpen"
-        :report="viewerReport"
-        @update:is-open="viewerOpen = $event"
-      />
+      </section>
 
-      <ion-toast
-        :is-open="toast.open"
-        :message="toast.message"
-        :color="toast.color"
-        :duration="3500"
-        @ionDidDismiss="toast.open = false"
-      />
-    </ion-content>
-  </ion-page>
+    </div>
+
+    <!-- GEOFENCE ERROR MODAL -->
+    <GeofenceErrorModal 
+      :is-open="isGeofenceErrorOpen"
+      :company-name="assignedCompany?.company_name || 'Designated Office'"
+      :formatted-distance="geofenceResult?.formattedDistance || 'calculating...'"
+      :allowed-radius="assignedCompany?.radius_meters || 150"
+      @close="isGeofenceErrorOpen = false"
+      @retry="refreshLocation(); isGeofenceErrorOpen = false;"
+    />
+
+    <!-- SAFE AT BASE CONFIRMATION MODAL -->
+    <SafeAtBaseModal 
+      :is-open="isSafeAtBaseModalOpen"
+      :loading="actionLoading"
+      @close="isSafeAtBaseModalOpen = false"
+      @confirm="handleConfirmSafeAtBase"
+    />
+
+    <!-- ACCOMPLISHMENT ENTRY MODAL -->
+    <AccomplishmentModal 
+      :is-open="isAccomplishmentModalOpen"
+      :intern-id="authStore.user?.id || ''"
+      :supervisor-id="assignedCompany?.supervisor_id"
+      :initial-data="editingAccomplishment"
+      @close="isAccomplishmentModalOpen = false"
+      @saved="() => { isAccomplishmentModalOpen = false; if (authStore.user?.id) accomplishmentsStore.fetchInternLogs(authStore.user.id); }"
+    />
+
+    <!-- PROOF VIEWER / LIGHTBOX MODAL -->
+    <ProofViewerModal 
+      :is-open="isProofViewerOpen"
+      :media-url="activeProofUrl"
+      :media-type="activeProofType"
+      :title="activeProofTitle"
+      @close="isProofViewerOpen = false"
+    />
+  </div>
 </template>
-
-<script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import type { RealtimeChannel } from '@supabase/supabase-js'
-import {
-  IonContent,
-  IonPage,
-  IonRefresher,
-  IonRefresherContent,
-  IonSpinner,
-  IonToast,
-  alertController
-} from '@ionic/vue'
-import AppHeader from '@/components/AppHeader.vue'
-import GeofenceMap from '@/components/GeofenceMap.vue'
-import InternVerificationCard from '@/components/InternVerificationCard.vue'
-import SafeAtBaseCard from '@/components/SafeAtBaseCard.vue'
-import ProofViewerModal from '@/components/ProofViewerModal.vue'
-import { useAuthStore } from '@/stores/auth'
-import { useSitesStore } from '@/stores/sites'
-import { useAttendanceStore } from '@/stores/attendance'
-import { useAccomplishmentsStore } from '@/stores/accomplishments'
-import { useGeolocation } from '@/composables/useGeolocation'
-import {
-  formatDistanceMeters,
-  haversineDistanceMeters,
-  isStrictlyWithinGeofence
-} from '@/lib/geofence'
-import { supabase } from '@/lib/supabase'
-import { csvFilename, downloadCsv } from '@/lib/csv'
-import type {
-  AccomplishmentReport,
-  ApprovalStatus
-} from '@/types'
-
-const auth = useAuthStore()
-const sitesStore = useSitesStore()
-const attendance = useAttendanceStore()
-const accomplishments = useAccomplishmentsStore()
-const { position, error: geoError, start: startGeolocation, stop: stopGeolocation } =
-  useGeolocation()
-
-const now = ref(Date.now())
-const reportTitle = ref('')
-const reportDate = ref(todayLocal())
-const reportHours = ref('0')
-const reportTasks = ref('')
-const reportLinks = ref('')
-const reportFiles = ref<File[]>([])
-const fileInput = ref<HTMLInputElement | null>(null)
-const viewerOpen = ref(false)
-const viewerReport = ref<AccomplishmentReport | null>(null)
-const toast = reactive({
-  open: false,
-  message: '',
-  color: 'success'
-})
-
-let clockTimer: number | null = null
-let profileChannel: RealtimeChannel | null = null
-
-const profile = computed(() => auth.profile)
-const site = computed(() => {
-  if (!profile.value?.company_site_id) {
-    return null
-  }
-  return (
-    sitesStore.sites.find((item) => item.id === profile.value?.company_site_id) ?? null
-  )
-})
-
-const distanceMeters = computed<number | null>(() => {
-  if (!position.value || !site.value) {
-    return null
-  }
-  return haversineDistanceMeters(
-    {
-      latitude: position.value.latitude,
-      longitude: position.value.longitude
-    },
-    {
-      latitude: site.value.latitude,
-      longitude: site.value.longitude
-    }
-  )
-})
-
-const inside = computed(() => {
-  if (!site.value || !position.value) {
-    return false
-  }
-  return isStrictlyWithinGeofence(
-    {
-      latitude: position.value.latitude,
-      longitude: position.value.longitude
-    },
-    site.value
-  )
-})
-
-const distanceLabel = computed(() => {
-  if (distanceMeters.value === null) {
-    return 'Distance unavailable'
-  }
-  return `${formatDistanceMeters(distanceMeters.value)} from center`
-})
-
-const canClockIn = computed(
-  () =>
-    Boolean(
-      auth.isFullyVerified &&
-        site.value &&
-        site.value.is_active &&
-        position.value &&
-        inside.value &&
-        !attendance.openLog
-    )
-)
-
-const elapsedLabel = computed(() => {
-  if (!attendance.openLog) {
-    return '00:00:00'
-  }
-  const elapsedMs = Math.max(
-    now.value - new Date(attendance.openLog.clock_in_at).getTime(),
-    0
-  )
-  const totalSeconds = Math.floor(elapsedMs / 1000)
-  const hours = Math.floor(totalSeconds / 3600)
-  const minutes = Math.floor((totalSeconds % 3600) / 60)
-  const seconds = totalSeconds % 60
-  return [hours, minutes, seconds]
-    .map((value) => String(value).padStart(2, '0'))
-    .join(':')
-})
-
-const requiredHours = computed(() => Number(profile.value?.required_hours ?? 0))
-const requiredHoursLabel = computed(() => requiredHours.value.toFixed(2))
-const approvedHoursLabel = computed(() => attendance.approvedHours.toFixed(2))
-const pendingHoursLabel = computed(() => attendance.pendingHours.toFixed(2))
-const remainingHoursLabel = computed(() =>
-  Math.max(requiredHours.value - attendance.approvedHours, 0).toFixed(2)
-)
-const progressRatio = computed(() => {
-  if (requiredHours.value <= 0) {
-    return 0
-  }
-  return Math.min(attendance.approvedHours / requiredHours.value, 1)
-})
-const progressPercentLabel = computed(
-  () => `${(progressRatio.value * 100).toFixed(1)}%`
-)
-
-function todayLocal(): string {
-  const current = new Date()
-  const offset = current.getTimezoneOffset() * 60000
-  return new Date(current.getTime() - offset).toISOString().slice(0, 10)
-}
-
-function formatDate(value: string): string {
-  const date = new Date(value.includes('T') ? value : `${value}T00:00:00`)
-  return date.toLocaleDateString(undefined, {
-    weekday: 'short',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric'
-  })
-}
-
-function formatTime(value: string): string {
-  return new Date(value).toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  })
-}
-
-function formatDateTime(value: string): string {
-  return `${formatDate(value)} at ${formatTime(value)}`
-}
-
-function statusBadgeClass(status: ApprovalStatus | string): string {
-  if (status === 'approved') return 'badge-pill-success'
-  if (status === 'rejected') return 'badge-pill-danger'
-  return 'badge-pill-amber'
-}
-
-function showToast(message: string, color = 'success'): void {
-  toast.message = message
-  toast.color = color
-  toast.open = true
-}
-
-function openProofs(report: AccomplishmentReport): void {
-  viewerReport.value = report
-  viewerOpen.value = true
-}
-
-function handleFiles(event: Event): void {
-  const input = event.target as HTMLInputElement
-  const files = Array.from(input.files ?? [])
-  if (files.length > 5) {
-    showToast('Attach at most 5 proof files per report.', 'danger')
-    input.value = ''
-    return
-  }
-  const tooLarge = files.find((file) => file.size > 50 * 1024 * 1024)
-  if (tooLarge) {
-    showToast(`${tooLarge.name} exceeds the 50 MB limit.`, 'danger')
-    input.value = ''
-    return
-  }
-  reportFiles.value = files
-}
-
-function removeFile(index: number): void {
-  reportFiles.value = reportFiles.value.filter((_, position) => position !== index)
-  if (fileInput.value) {
-    fileInput.value.value = ''
-  }
-}
-
-function exportReports(): void {
-  downloadCsv(
-    csvFilename('trainext-accomplishments'),
-    accomplishments.reports,
-    [
-      { label: 'Report date', value: (row) => row.report_date },
-      { label: 'Title', value: (row) => row.title },
-      { label: 'Tasks', value: (row) => row.tasks },
-      { label: 'Hours spent', value: (row) => Number(row.hours_spent).toFixed(2) },
-      { label: 'Status', value: (row) => row.status },
-      { label: 'Feedback', value: (row) => row.feedback ?? '' },
-      { label: 'Proof count', value: (row) => row.proofs?.length ?? 0 }
-    ]
-  )
-}
-
-function subscribeProfile(internId: string): void {
-  if (profileChannel) {
-    void supabase.removeChannel(profileChannel)
-  }
-  profileChannel = supabase
-    .channel(`profile-${internId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: 'UPDATE',
-        schema: 'public',
-        table: 'profiles',
-        filter: `id=eq.${internId}`
-      },
-      () => {
-        void auth.fetchProfile()
-      }
-    )
-    .subscribe()
-}
-
-async function loadData(): Promise<void> {
-  await auth.fetchProfile()
-
-  if (!profile.value) {
-    return
-  }
-
-  await Promise.all([
-    auth.fetchMentors(),
-    sitesStore.fetchSites(),
-    attendance.fetchLogs(profile.value.id),
-    accomplishments.fetchReports(profile.value.id)
-  ])
-
-  attendance.subscribe(profile.value.id)
-  accomplishments.subscribe(profile.value.id)
-  subscribeProfile(profile.value.id)
-}
-
-async function handleRefresh(event: CustomEvent): Promise<void> {
-  try {
-    await loadData()
-  } finally {
-    (event.target as HTMLIonRefresherElement).complete()
-  }
-}
-
-async function clockIn(): Promise<void> {
-  if (!profile.value || !site.value || !position.value) {
-    showToast('A GPS position and assigned site are required.', 'danger')
-    return
-  }
-
-  if (!auth.isFullyVerified) {
-    showToast('Both enrollment and deployment must be verified.', 'danger')
-    return
-  }
-
-  const within = isStrictlyWithinGeofence(
-    {
-      latitude: position.value.latitude,
-      longitude: position.value.longitude
-    },
-    site.value
-  )
-
-  if (!within) {
-    showToast(
-      `Clock-in blocked. You are ${formatDistanceMeters(
-        haversineDistanceMeters(
-          {
-            latitude: position.value.latitude,
-            longitude: position.value.longitude
-          },
-          {
-            latitude: site.value.latitude,
-            longitude: site.value.longitude
-          }
-        )
-      )} from the site center; the radius is ${site.value.radius_meters.toFixed(1)} m.`,
-      'danger'
-    )
-    return
-  }
-
-  try {
-    await attendance.clockIn(site.value.id, position.value)
-    showToast('Clocked in successfully.', 'success')
-  } catch (err) {
-    showToast(
-      err instanceof Error ? err.message : 'Clock-in failed.',
-      'danger'
-    )
-  }
-}
-
-async function confirmClockOut(): Promise<void> {
-  const alert = await alertController.create({
-    header: 'Clock out now?',
-    message: 'Your rendered hours will be computed and sent to your supervisor.',
-    buttons: [
-      { text: 'Cancel', role: 'cancel' },
-      {
-        text: 'Clock out',
-        role: 'confirm',
-        handler: () => {
-          void clockOut()
-        }
-      }
-    ]
-  })
-
-  await alert.present()
-}
-
-async function clockOut(): Promise<void> {
-  if (!position.value) {
-    showToast('A GPS position is required to clock out.', 'danger')
-    return
-  }
-
-  try {
-    const log = await attendance.clockOut(position.value)
-    showToast(
-      `Clocked out. ${Number(log.hours_rendered).toFixed(2)} hour(s) rendered.`,
-      'success'
-    )
-  } catch (err) {
-    showToast(
-      err instanceof Error ? err.message : 'Clock-out failed.',
-      'danger'
-    )
-  }
-}
-
-async function submitReport(): Promise<void> {
-  if (!profile.value) {
-    return
-  }
-
-  if (!auth.isFullyVerified) {
-    showToast('Both verification approvals are required before submitting.', 'danger')
-    return
-  }
-
-  const title = reportTitle.value.trim()
-  const tasks = reportTasks.value.trim()
-  const hours = Number(reportHours.value)
-  const links = reportLinks.value
-    .split('\n')
-    .map((link) => link.trim())
-    .filter(Boolean)
-
-  if (!title || !tasks) {
-    showToast('Task title and accomplishment details are required.', 'danger')
-    return
-  }
-
-  if (!Number.isFinite(hours) || hours < 0 || hours > 24) {
-    showToast('Hours must be between 0 and 24.', 'danger')
-    return
-  }
-
-  if (links.length > 5) {
-    showToast('Add at most 5 external proof links.', 'danger')
-    return
-  }
-
-  const todayLog =
-    attendance.logs.find(
-      (log) =>
-        log.clock_out_at !== null &&
-        log.clock_in_at.slice(0, 10) === reportDate.value
-    ) ?? null
-
-  try {
-    await accomplishments.submitReport(profile.value.id, {
-      report_date: reportDate.value,
-      title,
-      tasks,
-      hours_spent: hours,
-      attendance_log_id: todayLog?.id ?? null,
-      files: reportFiles.value,
-      links
-    })
-    reportTitle.value = ''
-    reportTasks.value = ''
-    reportHours.value = '0'
-    reportLinks.value = ''
-    reportFiles.value = []
-    if (fileInput.value) {
-      fileInput.value.value = ''
-    }
-    showToast('Accomplishment report submitted for review.', 'success')
-  } catch (err) {
-    showToast(
-      err instanceof Error ? err.message : 'Unable to submit report.',
-      'danger'
-    )
-  }
-}
-
-async function removeReport(id: string): Promise<void> {
-  try {
-    await accomplishments.deleteReport(id)
-    showToast('Pending report deleted.', 'success')
-  } catch (err) {
-    showToast(
-      err instanceof Error ? err.message : 'Unable to delete report.',
-      'danger'
-    )
-  }
-}
-
-onMounted(async () => {
-  clockTimer = window.setInterval(() => {
-    now.value = Date.now()
-  }, 1000)
-
-  await startGeolocation().catch(() => undefined)
-
-  try {
-    await loadData()
-  } catch (err) {
-    showToast(
-      err instanceof Error ? err.message : 'Unable to load intern dashboard.',
-      'danger'
-    )
-  }
-})
-
-onBeforeUnmount(() => {
-  if (clockTimer !== null) {
-    window.clearInterval(clockTimer)
-    clockTimer = null
-  }
-  attendance.unsubscribe()
-  accomplishments.unsubscribe()
-  if (profileChannel) {
-    void supabase.removeChannel(profileChannel)
-    profileChannel = null
-  }
-  stopGeolocation()
-})
-</script>
-
-<style scoped>
-/* Typography Definition */
-.font-aileron {
-  font-family: 'Aileron', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-}
-
-.font-regular {
-  font-family: 'Aileron', sans-serif !important;
-  font-weight: 400 !important;
-}
-
-.font-semibold {
-  font-family: 'Aileron SemiBold', 'Aileron', sans-serif !important;
-  font-weight: 600 !important;
-}
-
-.font-bold {
-  font-family: 'Aileron Bold', 'Aileron', sans-serif !important;
-  font-weight: 700 !important;
-}
-
-.font-heavy {
-  font-family: 'Aileron Heavy', 'Aileron Black', 'Aileron Bold', 'Aileron', sans-serif !important;
-  font-weight: 900 !important;
-}
-
-/* Ionic Background Override */
-ion-content.dashboard-content {
-  --background: transparent !important;
-}
-ion-content.dashboard-content::part(background) {
-  background: transparent !important;
-}
-
-/* Crisp & Transparent Glassmorphic Cards */
-.trainext-glass-card {
-  border-radius: 28px !important;
-  border: 1px solid rgba(255, 255, 255, 0.22) !important;
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.06) 0%,
-    rgba(4, 9, 22, 0.38) 40%,
-    rgba(2, 6, 17, 0.50) 100%
-  ) !important;
-  backdrop-filter: blur(8px) saturate(140%) !important;
-  -webkit-backdrop-filter: blur(8px) saturate(140%) !important;
-  box-shadow: 
-    0 16px 40px rgba(0, 0, 0, 0.75),
-    inset 0 1px 1px rgba(255, 255, 255, 0.35) !important;
-  padding: 24px !important;
-  box-sizing: border-box !important;
-}
-
-/* Card Header Titles */
-.card-title {
-  font-family: 'Aileron Heavy', 'Aileron Bold', 'Aileron', sans-serif !important;
-  font-size: 19px !important;
-  font-weight: 900 !important;
-  letter-spacing: -0.01em !important;
-  margin: 0 !important;
-}
-
-.card-subtitle {
-  font-family: 'Aileron Bold', 'Aileron', sans-serif !important;
-  font-size: 12px !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.01em !important;
-  margin: 0 !important;
-}
-
-/* Form Input Lines */
-.field-label {
-  font-size: 10px !important;
-  font-family: 'Aileron Heavy', 'Aileron Bold', 'Aileron', sans-serif !important;
-  font-weight: 900 !important;
-  letter-spacing: 0.15em !important;
-  color: #cbd5e1 !important;
-  text-transform: uppercase !important;
-  display: block !important;
-  margin-bottom: 6px !important;
-}
-
-.input-line-box {
-  position: relative !important;
-  display: flex !important;
-  align-items: center !important;
-  border-bottom: 1.25px solid rgba(255, 255, 255, 0.35) !important;
-  padding-bottom: 6px !important;
-  padding-top: 4px !important;
-  transition: border-color 0.2s ease !important;
-}
-
-.input-line-box:focus-within {
-  border-bottom-color: #00C2FF !important;
-}
-
-.field-input {
-  width: 100% !important;
-  background: transparent !important;
-  color: #ffffff !important;
-  font-size: 13.5px !important;
-  outline: none !important;
-  border: none !important;
-}
-
-.field-input::placeholder {
-  color: rgba(148, 163, 184, 0.6) !important;
-}
-
-.textarea-box {
-  border-bottom: 1.25px solid rgba(255, 255, 255, 0.35) !important;
-  padding: 4px 0 !important;
-  transition: border-color 0.2s ease !important;
-}
-
-.textarea-box:focus-within {
-  border-bottom-color: #00C2FF !important;
-}
-
-.field-textarea {
-  width: 100% !important;
-  background: transparent !important;
-  color: #ffffff !important;
-  font-size: 13px !important;
-  outline: none !important;
-  border: none !important;
-  resize: vertical !important;
-}
-
-.field-textarea::placeholder {
-  color: rgba(148, 163, 184, 0.6) !important;
-}
-
-/* Metric Stat Tiles */
-.stat-tile {
-  background: rgba(255, 255, 255, 0.04) !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  border-radius: 18px !important;
-  padding: 14px 12px !important;
-  text-align: center !important;
-}
-
-.stat-label {
-  font-size: 10px !important;
-  font-weight: 800 !important;
-  text-transform: uppercase !important;
-  letter-spacing: 0.1em !important;
-  color: #94a3b8 !important;
-  margin: 0 !important;
-}
-
-.stat-value {
-  font-size: 20px !important;
-  font-family: 'Aileron Heavy', 'Aileron', sans-serif !important;
-  font-weight: 900 !important;
-  margin: 4px 0 0 0 !important;
-}
-
-/* History Row */
-.history-row {
-  background: rgba(255, 255, 255, 0.03) !important;
-  border: 1px solid rgba(255, 255, 255, 0.10) !important;
-  border-radius: 18px !important;
-  padding: 14px 16px !important;
-  transition: all 0.2s ease !important;
-}
-
-.history-row:hover {
-  background: rgba(255, 255, 255, 0.06) !important;
-  border-color: rgba(0, 194, 255, 0.3) !important;
-}
-
-/* Badges / Chips */
-.badge-pill {
-  display: inline-flex !important;
-  align-items: center !important;
-  padding: 5px 12px !important;
-  border-radius: 9999px !important;
-  font-size: 11px !important;
-  font-weight: 800 !important;
-  letter-spacing: 0.04em !important;
-}
-
-.badge-pill-success {
-  background: rgba(16, 185, 129, 0.16) !important;
-  color: #34d399 !important;
-  border: 1px solid rgba(16, 185, 129, 0.35) !important;
-}
-
-.badge-pill-danger {
-  background: rgba(239, 68, 68, 0.16) !important;
-  color: #f87171 !important;
-  border: 1px solid rgba(239, 68, 68, 0.35) !important;
-}
-
-.badge-pill-amber {
-  background: rgba(245, 158, 11, 0.16) !important;
-  color: #fbbf24 !important;
-  border: 1px solid rgba(245, 158, 11, 0.35) !important;
-}
-
-.badge-pill-cyan {
-  background: rgba(0, 194, 255, 0.16) !important;
-  color: #00C2FF !important;
-  border: 1px solid rgba(0, 194, 255, 0.35) !important;
-}
-
-.badge-pill-slate {
-  background: rgba(148, 163, 184, 0.12) !important;
-  color: #cbd5e1 !important;
-  border: 1px solid rgba(255, 255, 255, 0.15) !important;
-}
-
-/* Pill Buttons */
-.pill-btn {
-  border-radius: 9999px !important;
-  padding: 13.5px 22px !important;
-  font-family: 'Aileron Heavy', 'Aileron Bold', 'Aileron', sans-serif !important;
-  font-weight: 900 !important;
-  font-size: 13.5px !important;
-  letter-spacing: 0.08em !important;
-  cursor: pointer !important;
-  border: none !important;
-  transition: all 0.2s ease !important;
-}
-
-.pill-btn:disabled {
-  opacity: 0.45 !important;
-  cursor: not-allowed !important;
-}
-
-.btn-gradient-cyan {
-  background: linear-gradient(135deg, #a5f3fc 0%, #67e8f9 45%, #38bdf8 100%) !important;
-  color: #000000 !important;
-  box-shadow: 0 0 20px rgba(0, 194, 255, 0.45) !important;
-}
-
-.btn-gradient-cyan:hover:not(:disabled) {
-  filter: brightness(1.06) !important;
-  box-shadow: 0 0 26px rgba(0, 194, 255, 0.65) !important;
-}
-
-.btn-danger-gradient {
-  background: linear-gradient(135deg, #f87171 0%, #ef4444 50%, #dc2626 100%) !important;
-  color: #ffffff !important;
-  box-shadow: 0 0 20px rgba(239, 68, 68, 0.45) !important;
-}
-
-.pill-btn-outline {
-  background: rgba(255, 255, 255, 0.05) !important;
-  border: 1px solid rgba(255, 255, 255, 0.25) !important;
-  color: #ffffff !important;
-  border-radius: 9999px !important;
-  padding: 6px 14px !important;
-  font-size: 11.5px !important;
-  font-weight: 800 !important;
-  cursor: pointer !important;
-  transition: all 0.2s ease !important;
-}
-
-.pill-btn-outline:hover {
-  border-color: #00C2FF !important;
-  color: #00C2FF !important;
-}
-
-.pill-btn-sm {
-  background: rgba(0, 194, 255, 0.12) !important;
-  border: 1px solid rgba(0, 194, 255, 0.3) !important;
-  color: #00C2FF !important;
-  border-radius: 9999px !important;
-  padding: 5px 12px !important;
-  font-size: 11px !important;
-  font-weight: 800 !important;
-  cursor: pointer !important;
-}
-
-.pill-btn-danger-sm {
-  background: rgba(239, 68, 68, 0.12) !important;
-  border: 1px solid rgba(239, 68, 68, 0.3) !important;
-  color: #f87171 !important;
-  border-radius: 9999px !important;
-  padding: 5px 12px !important;
-  font-size: 11px !important;
-  font-weight: 800 !important;
-  cursor: pointer !important;
-}
-</style>
