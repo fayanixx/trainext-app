@@ -11,14 +11,6 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
 
   const BUCKET_NAME = 'accomplishment-proofs';
 
-  /**
-   * Helper: Tumutukoy kung accomplishment_reports o accomplishment_logs ang gagamitin
-   */
-  const getTableName = () => 'accomplishment_reports';
-
-  /**
-   * 1. Upload File to Supabase Storage Bucket ('accomplishment-proofs')
-   */
   const uploadProofFile = async (
     file: File,
     folder: 'images' | 'documents' | 'videos'
@@ -39,43 +31,26 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
     }
 
     const { data } = supabase.storage.from(BUCKET_NAME).getPublicUrl(filePath);
-
     return data.publicUrl;
   };
 
-  /**
-   * 2. Fetch Accomplishment Logs for an Intern
-   */
   const fetchInternLogs = async (internId: string) => {
     if (!internId) return [];
     loading.value = true;
     errorMessage.value = null;
 
     try {
-      // Primary: accomplishment_reports
-      let { data, error } = await supabase
+      const { data, error } = await supabase
         .from('accomplishment_reports')
         .select('*')
         .eq('intern_id', internId)
         .order('report_date', { ascending: false });
 
-      // Fallback kung accomplishment_logs ang active sa database
-      if (error && error.code === '42P01') {
-        const fallback = await supabase
-          .from('accomplishment_logs')
-          .select('*')
-          .eq('intern_id', internId)
-          .order('report_date', { ascending: false });
-
-        data = fallback.data;
-        error = fallback.error;
-      }
-
       if (error) throw error;
       logs.value = (data as AccomplishmentLog[]) || [];
       return logs.value;
     } catch (err: any) {
-      console.error('Error fetching accomplishments:', err.message);
+      console.error('Error fetching intern accomplishments:', err.message);
       errorMessage.value = err.message;
       return [];
     } finally {
@@ -83,20 +58,19 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
     }
   };
 
-  /**
-   * 3. Submit New Accomplishment Log
-   */
   const createLog = async (payload: {
     internId?: string;
     intern_id?: string;
     supervisorId?: string | null;
     supervisor_id?: string | null;
     title: string;
-    description: string;
+    description?: string;
+    tasks?: string;
     reportDate?: string;
     report_date?: string;
     renderedHours?: number;
     rendered_hours?: number;
+    hours_spent?: number;
     proofImages?: string[];
     proof_images?: string[];
     proofDocuments?: string[];
@@ -111,205 +85,139 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
       const intern_id = payload.internId || payload.intern_id;
       if (!intern_id) throw new Error('Intern ID is required.');
 
-        const insertData: any = {
+      let supervisor_id = payload.supervisorId || payload.supervisor_id || null;
+
+      // Kung walang naipasa, kuhanin ang naka-assign na supervisor mula sa profile ng intern
+      if (!supervisor_id) {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('supervisor_id')
+          .eq('id', intern_id)
+          .maybeSingle();
+        if (prof?.supervisor_id) {
+          supervisor_id = prof.supervisor_id;
+        }
+      }
+
+      const cleanTitle = (payload.title || '').trim();
+      const cleanDesc = (payload.description || payload.tasks || '').trim();
+      const reportDate =
+        payload.reportDate ||
+        payload.report_date ||
+        new Date().toISOString().split('T')[0];
+      const hours = Number(
+        payload.renderedHours ??
+        payload.rendered_hours ??
+        payload.hours_spent ??
+        0
+      );
+
+      const insertPayload: any = {
         intern_id,
-        supervisor_id: payload.supervisorId || payload.supervisor_id || null,
-        title: payload.title.trim(),
-        description: payload.description.trim(),
-        tasks: payload.description.trim(), // Dual-map para masatisfy ang 'tasks' column
-        task: payload.title.trim(),        // Fallback para sa singular 'task' column
-        report_date:
-          payload.reportDate ||
-          payload.report_date ||
-          new Date().toISOString().split('T')[0],
-        rendered_hours: Number(payload.renderedHours ?? payload.rendered_hours ?? 0),
+        supervisor_id,
+        title: cleanTitle,
+        description: cleanDesc,
+        tasks: cleanDesc || cleanTitle,
+        task_description: cleanDesc || cleanTitle,
+        work_mode: 'onsite',
+        report_date: reportDate,
+        rendered_hours: hours,
+        hours_spent: hours,
         proof_images: payload.proofImages || payload.proof_images || [],
         proof_documents: payload.proofDocuments || payload.proof_documents || [],
         video_url: (payload.videoUrl || payload.video_url || '').trim() || null,
         status: 'pending',
       };
 
-      let targetTable = 'accomplishment_reports';
-      let { data, error } = await supabase
-        .from(targetTable)
-        .insert(insertData)
+      const { data, error } = await supabase
+        .from('accomplishment_reports')
+        .insert(insertPayload)
         .select()
         .single();
-
-      if (error && error.code === '42P01') {
-        targetTable = 'accomplishment_logs';
-        const fallback = await supabase
-          .from(targetTable)
-          .insert(insertData)
-          .select()
-          .single();
-
-        data = fallback.data;
-        error = fallback.error;
-      }
 
       if (error) throw error;
 
       logs.value.unshift(data as AccomplishmentLog);
       return data as AccomplishmentLog;
     } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to submit accomplishment log.';
+      errorMessage.value = err.message || 'Failed to submit accomplishment report.';
       throw err;
     } finally {
       loading.value = false;
     }
   };
 
-  /**
-   * 4. Update an Existing Pending Accomplishment Log
-   */
-  const updateLog = async (
-    id: string,
-    updates: Partial<{
-      title: string;
-      description: string;
-      report_date: string;
-      rendered_hours: number;
-      proof_images: string[];
-      proof_documents: string[];
-      video_url: string | null;
-    }>
-  ) => {
-    loading.value = true;
-    errorMessage.value = null;
+    const fetchSupervisorLogs = async (supervisorId: string) => {
+        loading.value = true;
+        errorMessage.value = null;
 
-    try {
-      let targetTable = 'accomplishment_reports';
-      let { data, error } = await supabase
-        .from(targetTable)
-        .update(updates)
-        .eq('id', id)
-        .eq('status', 'pending')
-        .select()
-        .single();
+        try {
+          // 1. Hanapin ang IDs ng mga interns na naka-link sa supervisor na ito
+          const { data: linkedInterns } = await supabase
+            .from('intern_supervisor_links')
+            .select('intern_id')
+            .eq('supervisor_id', supervisorId);
 
-      if (error && error.code === '42P01') {
-        targetTable = 'accomplishment_logs';
-        const fallback = await supabase
-          .from(targetTable)
-          .update(updates)
-          .eq('id', id)
-          .eq('status', 'pending')
-          .select()
-          .single();
+          const internIds = (linkedInterns || []).map((l: any) => l.intern_id);
 
-        data = fallback.data;
-        error = fallback.error;
-      }
+          // 2. Kunin ang reports kung saan supervisor_id ang user O galing sa kanyang mga interns
+          let query = supabase
+            .from('accomplishment_reports')
+            .select('*')
+            .order('created_at', { ascending: false });
 
-      if (error) throw error;
+          if (internIds.length > 0) {
+            query = query.or(`supervisor_id.eq.${supervisorId},intern_id.in.(${internIds.join(',')})`);
+          } else {
+            // Fallback: Kunin ang reports na nakaturo sa supervisor_id o lahat kung iisa lang ang supervisor
+            query = query.or(`supervisor_id.eq.${supervisorId},supervisor_id.is.null`);
+          }
 
-      const idx = logs.value.findIndex((l) => l.id === id);
-      if (idx !== -1) {
-        logs.value[idx] = data as AccomplishmentLog;
-      }
-      return data as AccomplishmentLog;
-    } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to update accomplishment log.';
-      throw err;
-    } finally {
-      loading.value = false;
-    }
-  };
+          const { data: reports, error: reportsErr } = await query;
+          if (reportsErr) throw reportsErr;
 
-  /**
-   * 5. Delete a Pending Accomplishment Log
-   */
-  const deleteLog = async (id: string) => {
-    loading.value = true;
-    errorMessage.value = null;
+          return await attachInternProfiles(reports || []);
+        } catch (err: any) {
+          console.error('Error fetching supervisor accomplishments:', err.message);
+          errorMessage.value = err.message;
+          return [];
+        } finally {
+          loading.value = false;
+        }
+      };
 
-    try {
-      let targetTable = 'accomplishment_reports';
-      let { error } = await supabase
-        .from(targetTable)
-        .delete()
-        .eq('id', id)
-        .eq('status', 'pending');
-
-      if (error && error.code === '42P01') {
-        targetTable = 'accomplishment_logs';
-        const fallback = await supabase
-          .from(targetTable)
-          .delete()
-          .eq('id', id)
-          .eq('status', 'pending');
-        error = fallback.error;
-      }
-
-      if (error) throw error;
-
-      logs.value = logs.value.filter((l) => l.id !== id);
-      return true;
-    } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to delete accomplishment log.';
-      throw err;
-    } finally {
-      loading.value = false;
-    }
-  };
-
-  /**
-   * 6. Fetch Logs Assigned to Supervisor
-   */
-  const fetchSupervisorLogs = async (supervisorId: string) => {
-    loading.value = true;
-    errorMessage.value = null;
-
-    try {
-      let targetTable = 'accomplishment_reports';
-      let { data, error } = await supabase
-        .from(targetTable)
-        .select(`
-          *,
-          intern:profiles!intern_id (
-            id,
-            full_name,
-            contact_number
-          )
-        `)
-        .eq('supervisor_id', supervisorId)
-        .order('created_at', { ascending: false });
-
-      if (error && error.code === '42P01') {
-        targetTable = 'accomplishment_logs';
-        const fallback = await supabase
-          .from(targetTable)
-          .select(`
-            *,
-            intern:profiles!accomplishment_logs_intern_id_fkey (
-              id,
-              full_name,
-              contact_number
-            )
-          `)
-          .eq('supervisor_id', supervisorId)
-          .order('created_at', { ascending: false });
-
-        data = fallback.data;
-        error = fallback.error;
-      }
-
-      if (error) throw error;
-      supervisorPendingLogs.value = (data as any[]) || [];
-      return supervisorPendingLogs.value;
-    } catch (err: any) {
-      console.error('Error fetching supervisor logs:', err.message);
-      errorMessage.value = err.message;
+  const attachInternProfiles = async (reports: any[]) => {
+    if (!reports.length) {
+      supervisorPendingLogs.value = [];
+      logs.value = [];
       return [];
-    } finally {
-      loading.value = false;
     }
+
+    const internIds = [...new Set(reports.map((r) => r.intern_id).filter(Boolean))];
+
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, full_name, email, contact_number')
+      .in('id', internIds);
+
+    const profileMap = new Map((profiles || []).map((p: any) => [p.id, p]));
+
+    const merged = reports.map((r: any) => ({
+      ...r,
+      intern: profileMap.get(r.intern_id) || {
+        full_name: 'Intern Trainee',
+        email: '',
+        contact_number: '',
+      },
+    }));
+
+    // Inia-assign sa parehong arrays para automatic na mabasa ng SupervisorDashboard
+    supervisorPendingLogs.value = merged;
+    logs.value = merged as AccomplishmentLog[];
+
+    return merged;
   };
 
-  /**
-   * 7. Single Review (Approve or Reject with Feedback)
-   */
   const reviewLog = async (params: {
     logId: string;
     status: 'approved' | 'rejected';
@@ -319,54 +227,42 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
     errorMessage.value = null;
 
     try {
+      const nowIso = new Date().toISOString();
       const payload: any = {
         status: params.status,
         feedback: params.feedback?.trim() || null,
-        approved_at: params.status === 'approved' ? new Date().toISOString() : null,
+        reviewed_at: nowIso,
+        approved_at: params.status === 'approved' ? nowIso : null,
       };
 
-      let targetTable = 'accomplishment_reports';
-      let { data, error } = await supabase
-        .from(targetTable)
+      const { data, error } = await supabase
+        .from('accomplishment_reports')
         .update(payload)
         .eq('id', params.logId)
         .select()
         .single();
 
-      if (error && error.code === '42P01') {
-        targetTable = 'accomplishment_logs';
-        const fallback = await supabase
-          .from(targetTable)
-          .update(payload)
-          .eq('id', params.logId)
-          .select()
-          .single();
-
-        data = fallback.data;
-        error = fallback.error;
-      }
-
       if (error) throw error;
 
-      const idx = supervisorPendingLogs.value.findIndex((l) => l.id === params.logId);
-      if (idx !== -1) {
-        supervisorPendingLogs.value[idx] = {
-          ...supervisorPendingLogs.value[idx],
-          ...data,
-        };
-      }
+      const updateLocal = (list: any[]) => {
+        const idx = list.findIndex((l) => l.id === params.logId);
+        if (idx !== -1) {
+          list[idx] = { ...list[idx], ...data };
+        }
+      };
+
+      updateLocal(logs.value);
+      updateLocal(supervisorPendingLogs.value);
+
       return data;
     } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to submit review.';
+      errorMessage.value = err.message || 'Failed to review accomplishment report.';
       throw err;
     } finally {
       loading.value = false;
     }
   };
 
-  /**
-   * 8. Batch Approve Accomplishments
-   */
   const batchApproveLogs = async (logIds: string[]) => {
     if (!logIds.length) return;
     loading.value = true;
@@ -374,38 +270,32 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
 
     try {
       const nowIso = new Date().toISOString();
-      let targetTable = 'accomplishment_reports';
-      let { error } = await supabase
-        .from(targetTable)
+      const { error } = await supabase
+        .from('accomplishment_reports')
         .update({
           status: 'approved',
+          reviewed_at: nowIso,
           approved_at: nowIso,
         })
         .in('id', logIds);
 
-      if (error && error.code === '42P01') {
-        targetTable = 'accomplishment_logs';
-        const fallback = await supabase
-          .from(targetTable)
-          .update({
-            status: 'approved',
-            approved_at: nowIso,
-          })
-          .in('id', logIds);
-        error = fallback.error;
-      }
-
       if (error) throw error;
 
-      supervisorPendingLogs.value = supervisorPendingLogs.value.map((log) => {
-        if (logIds.includes(log.id)) {
-          return { ...log, status: 'approved', approved_at: nowIso };
-        }
-        return log;
-      });
+      const updateBatch = (list: any[]) => {
+        return list.map((log) => {
+          if (logIds.includes(log.id)) {
+            return { ...log, status: 'approved', reviewed_at: nowIso, approved_at: nowIso };
+          }
+          return log;
+        });
+      };
+
+      logs.value = updateBatch(logs.value);
+      supervisorPendingLogs.value = updateBatch(supervisorPendingLogs.value);
+
       return true;
     } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to batch approve logs.';
+      errorMessage.value = err.message || 'Failed to batch approve reports.';
       throw err;
     } finally {
       loading.value = false;
@@ -421,8 +311,6 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
     fetchInternLogs,
     createLog,
     submitReport: createLog,
-    updateLog,
-    deleteLog,
     fetchSupervisorLogs,
     reviewLog,
     batchApproveLogs,
