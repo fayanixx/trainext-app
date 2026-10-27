@@ -63,14 +63,22 @@ function destinationFor(role?: string | null): string {
   return '/intern'
 }
 
-// Single, modern return-based navigation guard (No next() callback)
 router.beforeEach(async (to) => {
+  // 1. Kung recovery link ang binuksan mula sa email, huwag harangin o i-redirect sa dashboard
+  const isRecoveryHash = window.location.hash.includes('type=recovery') || to.query.type === 'recovery'
+  if (to.name === 'ResetPassword' || isRecoveryHash) {
+    if (to.name !== 'ResetPassword') {
+      return { name: 'ResetPassword', hash: window.location.hash }
+    }
+    return true
+  }
+
   const auth = useAuthStore()
 
-  // 1. I-load ang user profile kapag wala pa sa store
-  if (!auth.user) {
+  // 2. Tiyaking initialized ang session bago mag-decide ang guard
+  if (!auth.isInitialized) {
     try {
-      await auth.fetchProfile()
+      await auth.initialize()
     } catch (e) {
       console.error('Auth initialization error:', e)
     }
@@ -78,17 +86,17 @@ router.beforeEach(async (to) => {
 
   const isPublic = to.meta.public === true
 
-  // 2. Kung naka-login na at sinubukang pumunta sa /auth, idiretso sa dashboard ng kanyang role
+  // 3. Kung naka-login na at pumunta sa /auth o /login, idiretso sa dashboard
   if (to.name === 'Auth' && auth.isAuthenticated && auth.user) {
     return destinationFor(auth.user.role)
   }
 
-  // 3. Kung public route (e.g. /auth, /reset-password), papasukin
+  // 4. Papasukin kapag public route (e.g. login, reset-password request)
   if (isPublic) {
     return true
   }
 
-  // 4. Kung kailangan ng login pero hindi authenticated
+  // 5. Kung kailangan ng login pero walang session, balik sa /auth
   if (!auth.isAuthenticated || !auth.user) {
     return {
       name: 'Auth',
@@ -96,7 +104,7 @@ router.beforeEach(async (to) => {
     }
   }
 
-  // 5. Role-based check (haharangin kung mali ang dashboard na binubuksan)
+  // 6. Role-based check
   const requiredRole = to.meta.role as string | undefined
   if (requiredRole && auth.user.role !== requiredRole) {
     return destinationFor(auth.user.role)

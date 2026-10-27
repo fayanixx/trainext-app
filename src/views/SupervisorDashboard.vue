@@ -198,13 +198,13 @@ const handleBatchApprove = async () => {
   }
 };
 
-// Sign Out Handler
+// Clean Sign Out Handler gamit ang router.replace
 const handleSignOut = async () => {
   isSigningOut.value = true;
   try {
-    await authStore.signOut();
     showSignOutConfirm.value = false;
-    router.push('/auth');
+    await authStore.signOut();
+    router.replace('/auth');
   } catch (err: any) {
     console.error('Sign out error:', err.message);
   } finally {
@@ -232,7 +232,7 @@ const loadAllData = async () => {
 onMounted(async () => {
   await authStore.fetchProfile();
   if (!authStore.isAuthenticated || !authStore.isSupervisor || !authStore.user) {
-    router.push('/auth');
+    router.replace('/auth');
     return;
   }
   await loadAllData();
@@ -272,6 +272,7 @@ onMounted(async () => {
 onUnmounted(() => {
   if (supervisorRealtimeChannel) {
     supabase.removeChannel(supervisorRealtimeChannel);
+    supervisorRealtimeChannel = null;
   }
 });
 </script>

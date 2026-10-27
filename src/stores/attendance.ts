@@ -61,6 +61,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
   const logTimeIn = async (params: {
     internId: string;
     supervisorId?: string;
+    siteId?: string;
     latitude: number;
     longitude: number;
   }) => {
@@ -74,12 +75,12 @@ export const useAttendanceStore = defineStore('attendance', () => {
       const payload: any = {
         intern_id: params.internId,
         supervisor_id: params.supervisorId || null,
+        site_id: params.siteId || null,
         date: today,
         time_in: nowIso,
-        // Schema convention 1:
+        clock_in_at: nowIso,
         time_in_lat: params.latitude,
         time_in_lng: params.longitude,
-        // Schema convention 2 (satisfies clock_in_latitude NOT NULL constraint):
         clock_in_latitude: params.latitude,
         clock_in_longitude: params.longitude,
         status: 'on_duty',
@@ -123,15 +124,17 @@ export const useAttendanceStore = defineStore('attendance', () => {
       const timeOutIso = new Date().toISOString();
       let rendered = 0;
 
-      if (typeof calculateHoursRendered === 'function') {
-        rendered = calculateHoursRendered(activeShift.value.time_in, timeOutIso);
-      } else {
-        const diffMs = new Date(timeOutIso).getTime() - new Date(activeShift.value.time_in).getTime();
+      const startTime = activeShift.value.time_in || (activeShift.value as any).clock_in_at;
+      if (typeof calculateHoursRendered === 'function' && startTime) {
+        rendered = calculateHoursRendered(startTime, timeOutIso);
+      } else if (startTime) {
+        const diffMs = new Date(timeOutIso).getTime() - new Date(startTime).getTime();
         rendered = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
       }
 
       const updatePayload: any = {
         time_out: timeOutIso,
+        clock_out_at: timeOutIso,
         hours_rendered: rendered,
         status: 'in_transit',
       };
@@ -198,11 +201,9 @@ export const useAttendanceStore = defineStore('attendance', () => {
 
       if (params?.latitude !== undefined) {
         updatePayload.safe_location_lat = params.latitude;
-        updatePayload.safe_at_base_lat = params.latitude;
       }
       if (params?.longitude !== undefined) {
         updatePayload.safe_location_lng = params.longitude;
-        updatePayload.safe_at_base_lng = params.longitude;
       }
       if (params?.transitNotes) {
         updatePayload.transit_notes = params.transitNotes;

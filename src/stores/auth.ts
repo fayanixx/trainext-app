@@ -4,6 +4,7 @@ import type { UserRole, UserProfile } from '@/types';
 
 export interface UserProfileData {
   id: string;
+  email?: string;
   full_name: string;
   role: UserRole;
   contact_number?: string;
@@ -11,6 +12,7 @@ export interface UserProfileData {
   emergency_contact_name?: string;
   emergency_contact_number?: string;
   avatar_url?: string;
+  supervisor_id?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -40,38 +42,51 @@ export const useAuthStore = defineStore('auth', {
 
   actions: {
     async initialize() {
+      if (this.isInitialized) return;
+      this.loading = true;
+
       try {
-        this.loading = true;
         const { data: { session } } = await supabase.auth.getSession();
         if (session?.user) {
-          await this.fetchProfile();
+          await this.fetchProfile(session.user.id);
+        } else {
+          this.user = null;
         }
       } catch (err: any) {
-        this.error = err.message || 'Failed to initialize authentication.';
+        this.error = err.message || 'Failed to initialize session.';
+        this.user = null;
       } finally {
         this.loading = false;
         this.isInitialized = true;
       }
     },
 
-    async fetchProfile() {
+    async fetchProfile(userId?: string) {
       try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
+        let targetId = userId;
+
+        if (!targetId) {
+          const { data: { session } } = await supabase.auth.getSession();
+          targetId = session?.user?.id;
+        }
+
+        if (!targetId) {
           this.user = null;
-          return;
+          return null;
         }
 
         const { data, error } = await supabase
           .from('profiles')
           .select('*')
-          .eq('id', user.id)
+          .eq('id', targetId)
           .maybeSingle();
 
         if (error) throw error;
         this.user = data as any;
+        return this.user;
       } catch (err: any) {
         this.error = err.message || 'Failed to fetch user profile.';
+        return null;
       }
     },
 
@@ -87,7 +102,8 @@ export const useAuthStore = defineStore('auth', {
         if (error) throw error;
 
         if (data.user) {
-          await this.fetchProfile();
+          await this.fetchProfile(data.user.id);
+          this.isInitialized = true;
         }
       } catch (err: any) {
         this.error = err.message || 'Failed to sign in.';
@@ -101,6 +117,8 @@ export const useAuthStore = defineStore('auth', {
       this.loading = true;
       this.error = null;
       try {
+        // Ang trigger sa database (handle_new_user) ang awtomatikong gagawa
+        // ng profile row gamit ang metadata, nang hindi lumalabag sa RLS policy.
         const { data, error } = await supabase.auth.signUp({
           email: email.trim(),
           password: pass,
@@ -114,18 +132,13 @@ export const useAuthStore = defineStore('auth', {
 
         if (error) throw error;
 
-        if (data.user) {
-          const { error: profileError } = await supabase
-            .from('profiles')
-            .upsert({
-              id: data.user.id,
-              full_name: fullName.trim(),
-              role: role,
-            });
-
-          if (profileError) throw profileError;
-          await this.fetchProfile();
+        // Kung naka-disable ang email confirmation at may instant session:
+        if (data.session && data.user) {
+          await this.fetchProfile(data.user.id);
+          this.isInitialized = true;
         }
+
+        return data;
       } catch (err: any) {
         this.error = err.message || 'Failed to register account.';
         throw err;
@@ -158,7 +171,8 @@ export const useAuthStore = defineStore('auth', {
     },
 
     async assignGoogleRole(role: UserRole) {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user) throw new Error('No authenticated user session found.');
 
       const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
@@ -169,20 +183,22 @@ export const useAuthStore = defineStore('auth', {
           id: user.id,
           full_name: fullName,
           role: role,
+          email: user.email,
         });
 
       if (error) throw error;
-      await this.fetchProfile();
+      await this.fetchProfile(user.id);
     },
 
     async signOut() {
       this.loading = true;
       try {
         await supabase.auth.signOut();
-        this.user = null;
       } catch (err: any) {
-        this.error = err.message || 'Failed to sign out.';
+        console.error('Sign out error:', err);
       } finally {
+        this.user = null;
+        this.isInitialized = true;
         this.loading = false;
       }
     },

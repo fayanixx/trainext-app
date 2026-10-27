@@ -390,17 +390,16 @@ const handleAttendanceAction = async () => {
     }
 
     if (currentStatus.value === 'on_duty') {
-      const timeOutFn = (attendanceStore as any).logTimeOut || (attendanceStore as any).timeOut;
-      await timeOutFn({
+      await attendanceStore.logTimeOut({
         internId: authStore.user.id,
         latitude: internLat,
         longitude: internLng,
       });
     } else {
-      const timeInFn = (attendanceStore as any).logTimeIn || (attendanceStore as any).timeIn;
-      await timeInFn({
+      await attendanceStore.logTimeIn({
         internId: authStore.user.id,
         supervisorId: site.supervisor_id,
+        siteId: site.id,
         latitude: internLat,
         longitude: internLng,
       });
@@ -419,12 +418,13 @@ const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: 
   isProofViewerOpen.value = true;
 };
 
+// Modified for clean history replacement and instant teardown
 const handleSignOut = async () => {
   isSigningOut.value = true;
   try {
-    await authStore.signOut();
     showSignOutConfirm.value = false;
-    router.push('/auth');
+    await authStore.signOut();
+    router.replace('/auth');
   } catch (err: any) {
     console.error('Sign out error:', err.message);
   } finally {
@@ -435,15 +435,10 @@ const handleSignOut = async () => {
 const refreshData = async () => {
   if (!authStore.user?.id) return;
 
-  const loadHistory =
-    (attendanceStore as any).fetchAttendanceHistory ||
-    (attendanceStore as any).fetchInternLogs ||
-    (attendanceStore as any).fetchHistory;
-
   await Promise.allSettled([
     fetchAffiliation(),
     attendanceStore.fetchTodayShift(authStore.user.id),
-    typeof loadHistory === 'function' ? loadHistory(authStore.user.id) : Promise.resolve(),
+    attendanceStore.fetchAttendanceHistory(authStore.user.id),
     accomplishmentsStore.fetchInternLogs(authStore.user.id),
   ]);
 
@@ -455,7 +450,7 @@ onMounted(async () => {
   try {
     await authStore.fetchProfile();
     if (!authStore.isAuthenticated || !authStore.isIntern || !authStore.user) {
-      router.push('/auth');
+      router.replace('/auth');
       return;
     }
     await refreshData();
@@ -465,47 +460,59 @@ onMounted(async () => {
     liveTimerInterval = setInterval(updateLiveTimer, 1000);
 
     // Supabase Real-Time Subscriptions
-    if (authStore.user?.id) {
-      realtimeChannel = supabase
-        .channel(`intern-live-${authStore.user.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'attendance_logs',
-            filter: `intern_id=eq.${authStore.user.id}`,
-          },
-          () => {
-            refreshData();
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'accomplishment_reports',
-            filter: `intern_id=eq.${authStore.user.id}`,
-          },
-          () => {
-            refreshData();
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'intern_supervisor_links',
-            filter: `intern_id=eq.${authStore.user.id}`,
-          },
-          () => {
-            fetchAffiliation();
-          }
-        )
-        .subscribe();
-    }
+      if (authStore.user?.id) {
+        realtimeChannel = supabase
+          .channel(`intern-live-${authStore.user.id}`)
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'attendance_logs',
+              filter: `intern_id=eq.${authStore.user.id}`,
+            },
+            () => {
+              refreshData();
+            }
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'accomplishment_reports',
+              filter: `intern_id=eq.${authStore.user.id}`,
+            },
+            () => {
+              refreshData();
+            }
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'intern_supervisor_links',
+              filter: `intern_id=eq.${authStore.user.id}`,
+            },
+            () => {
+              fetchAffiliation();
+            }
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'company_sites',
+            },
+            async () => {
+              await fetchAffiliation();
+              renderInternGeofenceMap();
+            }
+          )
+          .subscribe();
+      }
   } finally {
     isInitialLoading.value = false;
   }
@@ -678,7 +685,7 @@ onUnmounted(() => {
               <p class="text-xs text-[#858994] mt-0.5 truncate">{{ supervisorSite?.office_address || 'Geofence access pending supervisor approval' }}</p>
             </div>
 
-            <!-- LIVE MINI-MAP CONTAINER[cite: 7] -->
+            <!-- LIVE MINI-MAP CONTAINER -->
             <div v-if="supervisorSite" class="w-full h-32 rounded-xl overflow-hidden border border-white/15 my-1 relative">
               <div id="intern-geofence-map" class="w-full h-full z-10"></div>
               <div class="absolute bottom-1.5 left-2 z-[400] bg-black/75 backdrop-blur-sm px-2 py-0.5 rounded text-[9.5px] text-slate-300 border border-white/10 flex items-center gap-2.5">
@@ -941,50 +948,44 @@ onUnmounted(() => {
       </footer>
     </div>
 
-    <!-- SIGN OUT CONFIRMATION MODAL -->
-    <div
-      v-if="showSignOutConfirm"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-[#05070b]/75 p-4 backdrop-blur-md"
-    >
-      <div
-        class="trainext-glass-card relative w-full max-w-sm overflow-hidden rounded-2xl border border-cyan-400/20 bg-[#0b1019]/95 p-6 shadow-[0_0_40px_rgba(34,211,238,0.08)] animate-in fade-in zoom-in-95 duration-200"
+      <!-- SIGN OUT CONFIRMATION MODAL -->
+      <div 
+        v-if="showSignOutConfirm" 
+        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
       >
-        <div class="absolute left-8 right-8 top-0 h-px bg-gradient-to-r from-transparent via-cyan-400/70 to-transparent"></div>
-
-        <div class="flex items-start gap-4">
-          <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-rose-400/25 bg-rose-400/10 text-rose-300">
-            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
+        <div class="trainext-glass-card max-w-sm w-full p-6 flex flex-col gap-4 border border-white/20 animate-in fade-in zoom-in-95 duration-150">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400">
+              <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-white">Confirm Sign Out</h3>
+              <p class="text-xs text-[#858994]">Are you sure you want to end your current session?</p>
+            </div>
           </div>
 
-          <div class="min-w-0 flex-1">
-            <h3 class="text-base font-semibold tracking-tight text-white">Confirm Sign Out</h3>
-            <p class="mt-1.5 text-sm leading-relaxed text-slate-400">Are you sure you want to end your current session?</p>
+          <div class="flex items-center justify-end gap-2.5 pt-2 border-t border-white/10">
+            <button 
+              type="button"
+              @click="showSignOutConfirm = false"
+              :disabled="isSigningOut"
+              class="px-4 py-2 rounded-full border border-white/20 text-xs font-semibold text-slate-300 hover:text-white transition cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button 
+              type="button"
+              @click="handleSignOut"
+              :disabled="isSigningOut"
+              class="px-4 py-2 rounded-full bg-rose-500/20 border border-rose-500/50 text-rose-300 text-xs font-bold hover:bg-rose-500/30 transition cursor-pointer"
+            >
+              {{ isSigningOut ? 'Signing out...' : 'Yes, Sign Out' }}
+            </button>
           </div>
-        </div>
-
-        <div class="mt-5 flex items-center justify-end gap-3 border-t border-white/[0.08] pt-4">
-          <button
-            type="button"
-            @click="showSignOutConfirm = false"
-            :disabled="isSigningOut"
-            class="rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-slate-300 transition-all duration-200 hover:border-white/20 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Cancel
-          </button>
-
-          <button
-            type="button"
-            @click="handleSignOut"
-            :disabled="isSigningOut"
-            class="rounded-xl border border-rose-400/30 bg-rose-500/15 px-4 py-2.5 text-sm font-semibold text-rose-300 transition-all duration-200 hover:border-rose-400/50 hover:bg-rose-500/25 hover:shadow-[0_0_18px_rgba(244,63,94,0.12)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {{ isSigningOut ? 'Signing out...' : 'Yes, Sign Out' }}
-          </button>
         </div>
       </div>
-    </div>
 
     <!-- MODALS -->
     <AccomplishmentModal 

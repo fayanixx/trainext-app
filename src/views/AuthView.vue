@@ -1,4 +1,4 @@
-  <script setup lang="ts">
+<script setup lang="ts">
   import { ref, onMounted } from 'vue';
   import { useRouter } from 'vue-router';
   import { supabase } from '@/lib/supabase';
@@ -35,12 +35,11 @@
   };
 
   const routeByRole = (role?: string | null) => {
-    if (role === 'supervisor') router.push('/supervisor');
-    else if (role === 'coordinator') router.push('/coordinator');
-    else router.push('/intern');
+    if (role === 'supervisor') router.replace('/supervisor');
+    else if (role === 'coordinator') router.replace('/coordinator');
+    else router.replace('/intern');
   };
 
-  // Check kung galing sa Google OAuth callback at kung may profile na may role na
   onMounted(async () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (session?.user) {
@@ -51,7 +50,6 @@
       if (authStore.user?.role) {
         routeByRole(authStore.user.role);
       } else {
-        // Bagong Google user na wala pang na-assign na role sa 'profiles'
         isRoleModalOpen.value = true;
       }
     }
@@ -106,7 +104,7 @@
       if (authStore.user) {
         routeByRole(authStore.user.role);
       } else {
-        successMessage.value = 'Account registered! Please check your email inbox to verify.';
+        successMessage.value = `Verification link sent to ${email.value.trim()}. Please verify your email before logging in.`;
         activeTab.value = 'login';
         password.value = '';
         confirmPassword.value = '';
@@ -180,12 +178,21 @@
             </button>
           </nav>
 
-          <!-- ALERTS -->
+          <!-- CYBER-GLASS ALERTS & CONFIRMATION -->
           <div v-if="errorMessage" class="message message-error" role="alert">
-            {{ errorMessage }}
+            <svg class="message-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <circle cx="12" cy="12" r="10" stroke-width="2" />
+              <line x1="12" y1="8" x2="12" y2="12" stroke-width="2" stroke-linecap="round" />
+              <line x1="12" y1="16" x2="12.01" y2="16" stroke-width="2" stroke-linecap="round" />
+            </svg>
+            <span>{{ errorMessage }}</span>
           </div>
+
           <div v-if="successMessage" class="message message-success" role="status">
-            {{ successMessage }}
+            <svg class="message-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>{{ successMessage }}</span>
           </div>
 
           <!-- ================= LOGIN TAB ================= -->
@@ -238,7 +245,7 @@
                     @click="showPassword = !showPassword"
                   >
                     <svg v-if="!showPassword" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M2.5 12s3.4-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.4 6.5-9.5 6.5S2.5 12 2.5 12Z" />
+                      <path d="M2.5 12s3.4-6.5 9.5-6.5 9.5 6.5-3.4 6.5-9.5 6.5S2.5 12 2.5 12Z" />
                       <circle cx="12" cy="12" r="2.8" />
                     </svg>
                     <svg v-else viewBox="0 0 24 24" aria-hidden="true">
@@ -521,15 +528,20 @@
     position: relative;
     isolation: isolate;
     min-height: 100vh;
-    min-height: 100svh;
+    min-height: 100dvh;
     width: 100%;
-    overflow-x: clip;
-    overflow-y: visible;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
     background: #050609;
     color: var(--tx-white);
     font-family: "Aileron", sans-serif;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
   }
 
   .auth-background {
@@ -558,57 +570,59 @@
     pointer-events: none;
   }
 
+  /* Centered with balanced padding */
   .auth-layout {
     width: 100%;
-    max-width: 560px;
+    max-width: 440px;
     min-height: 100vh;
-    min-height: 100svh;
-    height: auto;
+    min-height: 100dvh;
     margin: 0 auto;
-    padding: 24px 24px 30px;
+    padding: 32px 20px;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: center;
+    gap: 14px;
+    box-sizing: border-box;
   }
 
   .brand {
     display: flex;
     align-items: center;
     justify-content: center;
-    flex: 0 0 auto;
     width: 100%;
     margin-bottom: 2px;
   }
 
+  /* Tamang-tamang laki ng logo: sleek, crisp, hindi zoomed in */
   .brand-logo {
     display: block;
-    width: 250px;
-    max-width: 100%;
+    width: 185px;
+    max-width: 75vw;
     height: auto;
     object-fit: contain;
   }
 
   .glass-card {
     width: 100%;
-    max-width: 390px;
+    max-width: 380px;
     min-width: 0;
     flex: 0 0 auto;
-    padding: 18px 32px 36px;
+    padding: 22px 26px 30px;
     border: 1px solid var(--tx-line);
-    border-radius: 29px;
-    background: rgba(2, 4, 8, 0.19);
-    -webkit-backdrop-filter: blur(4px);
-    backdrop-filter: blur(4px);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+    border-radius: 28px;
+    background: rgba(2, 4, 8, 0.28);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.37), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   }
 
   .auth-tabs {
     position: relative;
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    height: 38px;
-    margin-bottom: 31px;
+    height: 36px;
+    margin-bottom: 24px;
   }
 
   .auth-tab {
@@ -621,13 +635,13 @@
     border: 0;
     background: transparent;
     color: rgba(255, 255, 255, 0.96);
-    font: 600 14px/1 "Aileron", sans-serif;
+    font: 600 13px/1 "Aileron", sans-serif;
     letter-spacing: -0.15px;
     cursor: pointer;
   }
 
   .auth-tab:not(.active) {
-    color: rgba(255, 255, 255, 0.88);
+    color: rgba(255, 255, 255, 0.65);
   }
 
   .tab-indicator {
@@ -643,37 +657,60 @@
 
   .tab-divider {
     position: absolute;
-    top: 1px;
+    top: 2px;
     left: 50%;
-    height: 33px;
+    height: 30px;
     width: 1px;
-    background: rgba(235, 240, 250, 0.7);
+    background: rgba(235, 240, 250, 0.3);
     transform: translateX(-50%);
   }
 
+  /* Cyber-Glass Alert Box */
   .message {
-    margin: 0 0 14px;
-    padding: 9px 10px;
-    border-radius: 8px;
+    margin: 0 0 16px;
+    padding: 10px 14px;
+    border-radius: 14px;
     font-size: 11px;
     line-height: 1.45;
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
     overflow-wrap: anywhere;
+    box-sizing: border-box;
+    backdrop-filter: blur(6px);
+  }
+
+  .message-icon {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    margin-top: 1px;
   }
 
   .message-error {
-    color: #ffd5d5;
-    border: 1px solid rgba(248, 113, 113, 0.4);
-    background: rgba(70, 10, 20, 0.55);
+    color: #ffc4c4;
+    border: 1px solid rgba(244, 63, 94, 0.45);
+    background: rgba(40, 10, 18, 0.65);
+    box-shadow: 0 0 15px rgba(244, 63, 94, 0.15);
+  }
+
+  .message-error .message-icon {
+    stroke: #f43f5e;
   }
 
   .message-success {
-    color: #c6ffdf;
-    border: 1px solid rgba(52, 211, 153, 0.35);
-    background: rgba(5, 55, 39, 0.5);
+    color: #e6faff;
+    border: 1px solid rgba(0, 217, 255, 0.5);
+    background: rgba(0, 35, 50, 0.7);
+    box-shadow: 0 0 20px rgba(0, 217, 255, 0.2);
+  }
+
+  .message-success .message-icon {
+    stroke: #00d9ff;
   }
 
   .login-heading {
-    margin-bottom: 25px;
+    margin-bottom: 20px;
   }
 
   .login-heading h1,
@@ -684,22 +721,22 @@
   }
 
   .login-heading h1 {
-    font-size: 32px;
-    line-height: 1.05;
-    letter-spacing: -1.15px;
+    font-size: 28px;
+    line-height: 1.1;
+    letter-spacing: -0.8px;
   }
 
   .login-heading p,
   .signup-heading p {
-    margin: 3px 0 0;
+    margin: 4px 0 0;
     color: var(--tx-cyan);
     font-weight: 400;
   }
 
   .login-heading p {
-    font-size: 13px;
+    font-size: 12.5px;
     line-height: 1.35;
-    padding-left: 7px;
+    padding-left: 2px;
   }
 
   .auth-form {
@@ -760,7 +797,7 @@
     outline: 0;
     color: #f8fbff;
     background: transparent;
-    font: 400 10.5px/1.4 "Aileron", sans-serif;
+    font: 400 11px/1.4 "Aileron", sans-serif;
     letter-spacing: 0;
   }
 
@@ -809,13 +846,13 @@
   .forgot-row {
     display: flex;
     justify-content: flex-end;
-    margin-top: 5px;
-    margin-bottom: 19px;
+    margin-top: 6px;
+    margin-bottom: 18px;
   }
 
   .forgot-row a {
     color: rgba(209, 212, 221, 0.83);
-    font: 600 8px/1.3 "Aileron", sans-serif;
+    font: 600 8.5px/1.3 "Aileron", sans-serif;
     letter-spacing: 0.85px;
     text-decoration: none;
   }
@@ -830,56 +867,56 @@
     justify-content: center;
     width: 174px;
     max-width: 100%;
-    height: 38px;
+    height: 40px;
     margin-right: auto;
     margin-left: auto;
     border: 0;
     border-radius: 999px;
     color: #050609;
     background: linear-gradient(180deg, #f7fcff 0%, #c6f0ff 52%, #63daf7 100%);
-    box-shadow: 0 1px 2px rgba(255, 255, 255, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    box-shadow: 0 2px 8px rgba(0, 217, 255, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.9);
     font: 700 12px/1 "Aileron", sans-serif;
     cursor: pointer;
     transition: filter 150ms ease, transform 150ms ease;
   }
 
   .primary-button:hover:not(:disabled) {
-    filter: brightness(1.04);
+    filter: brightness(1.05);
   }
 
   .primary-button:active:not(:disabled) {
-    transform: scale(0.985);
+    transform: scale(0.98);
   }
 
   .primary-button:disabled {
-    opacity: 0.65;
+    opacity: 0.6;
     cursor: wait;
   }
 
   .login-button {
-    margin-bottom: 19px;
+    margin-bottom: 16px;
   }
 
   .or-divider {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 24px;
+    gap: 18px;
     width: 100%;
-    margin-bottom: 19px;
+    margin-bottom: 16px;
   }
 
   .or-divider span {
     display: block;
-    width: 79px;
-    max-width: calc((100% - 45px) / 2);
+    width: 70px;
+    max-width: calc((100% - 40px) / 2);
     height: 1px;
-    background: rgba(225, 230, 240, 0.72);
+    background: rgba(225, 230, 240, 0.35);
   }
 
   .or-divider small {
     color: rgba(205, 209, 220, 0.8);
-    font: 600 6.5px/1 "Aileron", sans-serif;
+    font: 600 7px/1 "Aileron", sans-serif;
     letter-spacing: 1.1px;
   }
 
@@ -887,15 +924,15 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
+    gap: 9px;
     width: 100%;
-    height: 42px;
-    margin: 0 0 13px;
+    height: 40px;
+    margin: 0 0 12px;
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 999px;
     color: rgba(213, 216, 225, 0.85);
     background: rgba(95, 105, 120, 0.15);
-    font: 600 8.5px/1 "Aileron", sans-serif;
+    font: 600 9px/1 "Aileron", sans-serif;
     letter-spacing: 0.85px;
     cursor: pointer;
     transition: background 150ms ease, border-color 150ms ease;
@@ -908,16 +945,16 @@
 
   .google-icon {
     display: block;
-    width: 20px;
-    height: 20px;
-    flex: 0 0 20px;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
   }
 
   .switch-prompt {
     margin: 0;
     color: rgba(194, 198, 208, 0.82);
     text-align: center;
-    font: 400 8px/1.5 "Aileron", sans-serif;
+    font: 400 8.5px/1.5 "Aileron", sans-serif;
     letter-spacing: 0.45px;
   }
 
@@ -926,7 +963,7 @@
     border: 0;
     color: var(--tx-cyan);
     background: transparent;
-    font: 700 8px/1.5 "Aileron", sans-serif;
+    font: 700 8.5px/1.5 "Aileron", sans-serif;
     letter-spacing: 0.25px;
     text-decoration: underline;
     text-underline-offset: 2px;
@@ -934,29 +971,29 @@
   }
 
   .signup-card {
-    padding-top: 19px;
-    padding-bottom: 34px;
+    padding-top: 18px;
+    padding-bottom: 26px;
   }
 
   .signup-card .auth-tabs {
-    margin-bottom: 30px;
+    margin-bottom: 20px;
   }
 
   .signup-heading {
-    margin-bottom: 18px;
+    margin-bottom: 14px;
   }
 
   .signup-heading h1 {
-    font-size: 24px;
+    font-size: 22px;
     line-height: 1.15;
-    letter-spacing: -0.7px;
+    letter-spacing: -0.6px;
     white-space: nowrap;
   }
 
   .signup-heading p {
     max-width: 255px;
-    margin-top: 5px;
-    font-size: 11.5px;
+    margin-top: 4px;
+    font-size: 11px;
     line-height: 1.35;
     padding-left: 2px;
   }
@@ -964,18 +1001,18 @@
   .role-field {
     min-width: 0;
     padding: 0;
-    margin: 0 0 11px;
+    margin: 0 0 10px;
     border: 0;
   }
 
   .role-field legend {
-    margin-bottom: 7px;
+    margin-bottom: 6px;
   }
 
   .role-options {
     display: grid;
     grid-template-columns: 0.85fr 1.15fr 1.25fr;
-    gap: 8px;
+    gap: 7px;
     width: 100%;
   }
 
@@ -984,7 +1021,7 @@
     align-items: center;
     justify-content: center;
     min-width: 0;
-    height: 30px;
+    height: 28px;
     padding: 0 5px;
     border: 1px solid var(--role-border);
     border-radius: 999px;
@@ -1007,13 +1044,13 @@
   .name-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 22px;
-    margin-bottom: 12px;
+    gap: 16px;
+    margin-bottom: 10px;
   }
 
   .name-row .input-line {
     gap: 6px;
-    padding-bottom: 6px;
+    padding-bottom: 5px;
   }
 
   .name-row .field-icon {
@@ -1023,35 +1060,34 @@
   }
 
   .name-row .input-line input {
-    font-size: 9.5px;
+    font-size: 10px;
   }
 
   .signup-email,
   .signup-password {
-    margin-bottom: 12px;
+    margin-bottom: 10px;
   }
 
   .signup-confirm {
-    margin-bottom: 17px;
+    margin-bottom: 14px;
   }
 
   .register-button {
-    margin-bottom: 17px;
+    margin-bottom: 14px;
   }
 
   .signup-switch {
-    font-size: 8px;
+    font-size: 8.5px;
   }
 
   .auth-footer {
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 3px;
+    gap: 4px;
     width: 100%;
-    margin-top: 20px;
     color: rgba(225, 228, 237, 0.74);
-    font: 400 8.5px/1.4 "Aileron", sans-serif;
+    font: 400 9px/1.4 "Aileron", sans-serif;
     letter-spacing: 0.25px;
   }
 
@@ -1059,38 +1095,20 @@
     color: var(--tx-cyan);
   }
 
-  @media (min-width: 600px) {
+  @media (max-width: 480px) {
     .auth-layout {
-      justify-content: center;
-      padding-top: 20px;
-      padding-bottom: 24px;
+      padding: 24px 16px;
+      gap: 10px;
     }
     .brand-logo {
-      width: 290px;
+      width: 160px;
     }
     .glass-card {
-      max-width: 390px;
-    }
-  }
-
-  @media (max-width: 599px) {
-    .auth-layout {
-      justify-content: flex-start;
-      padding: 24px 22px 28px;
-    }
-    .brand-logo {
-      width: 175px;
-    }
-    .glass-card {
-      max-width: 390px;
-      padding-right: 25px;
-      padding-left: 25px;
+      padding: 18px 20px 24px;
+      border-radius: 24px;
     }
     .signup-card h1 {
-      font-size: 22px;
-    }
-    .name-row {
-      gap: 15px;
+      font-size: 20px;
     }
   }
   </style>
