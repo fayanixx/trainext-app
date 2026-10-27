@@ -18,6 +18,8 @@ const authStore = useAuthStore();
 const fullName = ref('');
 const contactNumber = ref('');
 const userEmail = ref('');
+const isOAuthUser = ref(false);
+
 const currentPassword = ref('');
 const newPassword = ref('');
 const confirmPassword = ref('');
@@ -29,10 +31,22 @@ const showNewPassword = ref(false);
 const errorMessage = ref('');
 const successMessage = ref('');
 
-const fetchUserEmail = async () => {
-  const { data } = await supabase.auth.getUser();
-  if (data?.user?.email) {
-    userEmail.value = data.user.email;
+const syncUserData = async () => {
+  try {
+    const { data } = await supabase.auth.getUser();
+    if (data?.user) {
+      userEmail.value = data.user.email || '';
+      // Check kung Google OAuth provider
+      const provider = data.user.app_metadata?.provider;
+      isOAuthUser.value = provider === 'google';
+    }
+
+    if (authStore.user) {
+      fullName.value = authStore.user.full_name || '';
+      contactNumber.value = authStore.user.contact_number || '';
+    }
+  } catch (err: any) {
+    console.warn('Profile sync warning:', err.message);
   }
 };
 
@@ -41,26 +55,25 @@ watch(
   () => props.isOpen,
   async (open) => {
     if (open) {
-      if (authStore.user) {
-        fullName.value = authStore.user.full_name || '';
-        contactNumber.value = authStore.user.contact_number || '';
-      }
-      await fetchUserEmail();
+      errorMessage.value = '';
+      successMessage.value = '';
       currentPassword.value = '';
       newPassword.value = '';
       confirmPassword.value = '';
-      errorMessage.value = '';
-      successMessage.value = '';
+      await syncUserData();
     }
   }
 );
 
 onMounted(async () => {
-  await fetchUserEmail();
+  await syncUserData();
 });
 
 const handleSave = async () => {
-  if (!authStore.user?.id) return;
+  if (!authStore.user?.id) {
+    errorMessage.value = 'User session not found. Please re-login.';
+    return;
+  }
 
   errorMessage.value = '';
   successMessage.value = '';
@@ -70,8 +83,16 @@ const handleSave = async () => {
     return;
   }
 
-  // Password change validation
-  if (newPassword.value || currentPassword.value) {
+  const wantsPasswordChange = !!(newPassword.value || currentPassword.value);
+
+  // If user signed in via Google, password change via email password is not applicable
+  if (wantsPasswordChange && isOAuthUser.value) {
+    errorMessage.value = 'Google-authenticated accounts manage passwords directly via Google.';
+    return;
+  }
+
+  // Password change validation for standard email/pass users
+  if (wantsPasswordChange) {
     if (!currentPassword.value) {
       errorMessage.value = 'Please enter your current password to authorize this change.';
       return;
@@ -93,18 +114,17 @@ const handleSave = async () => {
   isSubmitting.value = true;
 
   try {
-    // 1. If password change is requested, verify current password first
-    if (newPassword.value && currentPassword.value && userEmail.value) {
+    // 1. Password update logic (for non-OAuth accounts)
+    if (wantsPasswordChange && userEmail.value) {
       const { error: verifyError } = await supabase.auth.signInWithPassword({
         email: userEmail.value,
         password: currentPassword.value,
       });
 
       if (verifyError) {
-        throw new Error('Current password verification failed. Please check your current password.');
+        throw new Error('Incorrect current password.');
       }
 
-      // Update to new password
       const { error: passwordError } = await supabase.auth.updateUser({
         password: newPassword.value,
       });
@@ -123,8 +143,10 @@ const handleSave = async () => {
 
     if (profileError) throw profileError;
 
+    // Refresh store profile
     await authStore.fetchProfile();
-    successMessage.value = 'Profile updated successfully!';
+    successMessage.value = 'Profile settings saved successfully!';
+
     currentPassword.value = '';
     newPassword.value = '';
     confirmPassword.value = '';
@@ -132,7 +154,7 @@ const handleSave = async () => {
     setTimeout(() => {
       emit('saved');
       emit('close');
-    }, 1200);
+    }, 900);
   } catch (err: any) {
     errorMessage.value = err.message || 'Failed to update profile settings.';
   } finally {
@@ -140,7 +162,6 @@ const handleSave = async () => {
   }
 };
 </script>
-
 <template>
   <div 
     v-if="isOpen" 

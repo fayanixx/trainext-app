@@ -1,347 +1,382 @@
-  <script setup lang="ts">
-  import { ref, onMounted, onUnmounted, computed } from 'vue';
-  import { useRouter } from 'vue-router';
-  import { supabase } from '@/lib/supabase';
-  import { useAuthStore } from '@/stores/auth';
-  import { useAttendanceStore } from '@/stores/attendance';
-  import { useAccomplishmentsStore } from '@/stores/accomplishments';
-  import type { CompanySite } from '@/types';
-  import AccomplishmentModal from '@/components/AccomplishmentModal.vue';
-  import SafeAtBaseModal from '@/components/SafeAtBaseModal.vue';
-  import GeofenceErrorModal from '@/components/GeofenceErrorModal.vue';
-  import ProofViewerModal from '@/components/ProofViewerModal.vue';
-  import ProfileSettingsModal from '@/components/ProfileSettingsModal.vue';
-  import { useGeolocation } from '@/composables/useGeolocation';
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { useRouter } from 'vue-router';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/stores/auth';
+import { useAttendanceStore } from '@/stores/attendance';
+import { useAccomplishmentsStore } from '@/stores/accomplishments';
+import type { CompanySite } from '@/types';
+import AccomplishmentModal from '@/components/AccomplishmentModal.vue';
+import SafeAtBaseModal from '@/components/SafeAtBaseModal.vue';
+import GeofenceErrorModal from '@/components/GeofenceErrorModal.vue';
+import ProofViewerModal from '@/components/ProofViewerModal.vue';
+import ProfileSettingsModal from '@/components/ProfileSettingsModal.vue';
+import { useGeolocation } from '@/composables/useGeolocation';
 
-  let realtimeChannel: any = null;
-  const router = useRouter();
-  const authStore = useAuthStore();
-  const attendanceStore = useAttendanceStore();
-  const accomplishmentsStore = useAccomplishmentsStore();
-  const { coordinates, refreshLocation } = useGeolocation();
-  // UI Modals
-  const isProfileSettingsOpen = ref(false);
-  const isAccomplishmentModalOpen = ref(false);
-  const isSafeAtBaseModalOpen = ref(false);
-  const isProofViewerOpen = ref(false);
-  const activeProofUrl = ref<string | null>(null);
-  const activeProofType = ref<'image' | 'document' | 'video' | null>(null);
-  const activeProofTitle = ref('');
+let realtimeChannel: any = null;
+const router = useRouter();
+const authStore = useAuthStore();
+const attendanceStore = useAttendanceStore();
+const accomplishmentsStore = useAccomplishmentsStore();
+const { coordinates, refreshLocation } = useGeolocation();
 
-  // State
-  const supervisorSite = ref<CompanySite | null>(null);
-  const internLinkStatus = ref<'none' | 'pending' | 'approved' | 'rejected'>('none');
-  const selectedSupervisorId = ref<string | null>(null);
-  const availableSupervisors = ref<any[]>([]);
-  const linkingLoading = ref(false);
-  const linkFeedback = ref<{ type: 'success' | 'error'; message: string } | null>(null);
+// UI Modals
+const isProfileSettingsOpen = ref(false);
+const isAccomplishmentModalOpen = ref(false);
+const isSafeAtBaseModalOpen = ref(false);
+const isProofViewerOpen = ref(false);
+const showSignOutConfirm = ref(false);
+const isSigningOut = ref(false);
 
-  // Geofence Error State
-  const geofenceError = ref<{
-    isOpen: boolean;
-    companyName: string;
-    formattedDistance: string;
-    allowedRadius: number;
-  }>({
-    isOpen: false,
-    companyName: '',
-    formattedDistance: '0m',
-    allowedRadius: 0,
-  });
+const activeProofUrl = ref<string | null>(null);
+const activeProofType = ref<'image' | 'document' | 'video' | null>(null);
+const activeProofTitle = ref('');
 
-  // Target Hours Progress Calculation
-  const requiredHours = computed(() => {
-    return Number((authStore.user as any)?.required_hours) || 486;
-  });
-  const renderedHours = computed(() => {
-    return (attendanceStore.attendanceHistory || []).reduce(
-      (acc, log) => acc + (Number(log.hours_rendered) || 0),
-      0
-    );
-  });
+// State
+const supervisorSite = ref<CompanySite | null>(null);
+const internLinkStatus = ref<'none' | 'pending' | 'approved' | 'rejected'>('none');
+const selectedSupervisorId = ref<string | null>(null);
+const availableSupervisors = ref<any[]>([]);
+const linkingLoading = ref(false);
+const linkFeedback = ref<{ type: 'success' | 'error'; message: string } | null>(null);
+const isInitialLoading = ref(true);
 
-  const progressPercentage = computed(() => {
-    const pct = (renderedHours.value / requiredHours.value) * 100;
-    return Math.min(Math.round(pct), 100);
-  });
+// Geofence Error State
+const geofenceError = ref<{
+  isOpen: boolean;
+  companyName: string;
+  formattedDistance: string;
+  allowedRadius: number;
+}>({
+  isOpen: false,
+  companyName: '',
+  formattedDistance: '0m',
+  allowedRadius: 0,
+});
 
-  // Shift Status Helpers
-  const currentShift = computed(() => attendanceStore.activeShift);
-  const currentStatus = computed(() => attendanceStore.activeShift?.status || null);
+// Target Hours Progress Calculation
+const requiredHours = computed(() => {
+  return Number((authStore.user as any)?.required_hours) || 486;
+});
 
-  const currentStatusText = computed(() => {
-    if (currentStatus.value === 'on_duty') return 'On Duty';
-    if (currentStatus.value === 'in_transit') return 'In Transit';
-    if (currentStatus.value === 'safe_at_base') return 'Safe at Base';
-    return 'Not Clocked In';
-  });
+const renderedHours = computed(() => {
+  return (attendanceStore.attendanceHistory || []).reduce(
+    (acc, log) => acc + (Number(log.hours_rendered) || 0),
+    0
+  );
+});
 
-  // Load Intern's Supervisor Affiliation Status
-  const fetchAffiliation = async () => {
-    if (!authStore.user?.id) return;
+const progressPercentage = computed(() => {
+  if (requiredHours.value <= 0) return 0;
+  const pct = (renderedHours.value / requiredHours.value) * 100;
+  return Math.min(Math.round(pct), 100);
+});
 
-    try {
-      const { data: linkData, error: linkErr } = await supabase
-        .from('intern_supervisor_links')
-        .select('status, supervisor_id')
-        .eq('intern_id', authStore.user.id)
-        .maybeSingle();
+// Shift Status Helpers
+const currentShift = computed(() => attendanceStore.activeShift);
+const currentStatus = computed(() => attendanceStore.activeShift?.status || null);
 
-      if (linkErr) throw linkErr;
+const currentStatusText = computed(() => {
+  if (currentStatus.value === 'on_duty') return 'On Duty';
+  if (currentStatus.value === 'in_transit') return 'In Transit';
+  if (currentStatus.value === 'safe_at_base') return 'Safe at Base';
+  return 'Not Clocked In';
+});
 
-      if (linkData) {
-        internLinkStatus.value = linkData.status;
-        if (linkData.status === 'approved' && linkData.supervisor_id) {
-          const { data: siteData } = await supabase
-            .from('company_sites')
-            .select('*')
-            .eq('supervisor_id', linkData.supervisor_id)
-            .maybeSingle();
+// Load Intern's Supervisor Affiliation Status
+const fetchAffiliation = async () => {
+  if (!authStore.user?.id) return;
 
-          supervisorSite.value = (siteData as CompanySite) || null;
-        }
+  try {
+    const { data: linkData, error: linkErr } = await supabase
+      .from('intern_supervisor_links')
+      .select('status, supervisor_id')
+      .eq('intern_id', authStore.user.id)
+      .maybeSingle();
+
+    if (linkErr) throw linkErr;
+
+    if (linkData) {
+      internLinkStatus.value = linkData.status;
+      if (linkData.status === 'approved' && linkData.supervisor_id) {
+        const { data: siteData } = await supabase
+          .from('company_sites')
+          .select('*')
+          .eq('supervisor_id', linkData.supervisor_id)
+          .maybeSingle();
+
+        supervisorSite.value = (siteData as CompanySite) || null;
       } else {
-        internLinkStatus.value = 'none';
-        const { data: sups } = await supabase
-          .from('profiles')
-          .select(`
+        supervisorSite.value = null;
+      }
+    } else {
+      internLinkStatus.value = 'none';
+      supervisorSite.value = null;
+
+      // Kumuha mula sa company_sites kasama ang supervisor profile info
+      const { data: sites, error: sitesErr } = await supabase
+        .from('company_sites')
+        .select(`
+          id,
+          company_name,
+          office_address,
+          supervisor_id,
+          supervisor:profiles!supervisor_id (
             id,
             full_name,
-            company_sites (
-              id,
-              company_name,
-              office_address
-            )
-          `)
+            email
+          )
+        `);
+
+      if (!sitesErr && sites && sites.length > 0) {
+        availableSupervisors.value = sites.map((s: any) => ({
+          supervisor_id: s.supervisor_id,
+          full_name: s.supervisor?.full_name || 'Assigned Supervisor',
+          company_name: s.company_name || 'Designated Workplace',
+          address: s.office_address,
+        }));
+      } else {
+        // Fallback: Kunin ang lahat ng profiles na may supervisor role
+        const { data: sups } = await supabase
+          .from('profiles')
+          .select('id, full_name, email')
           .eq('role', 'supervisor');
 
-        availableSupervisors.value = sups || [];
+        availableSupervisors.value = (sups || []).map((sup: any) => ({
+          supervisor_id: sup.id,
+          full_name: sup.full_name || 'Company Supervisor',
+          company_name: 'Workplace Partner',
+          address: 'Office Perimeter',
+        }));
       }
-    } catch (err: any) {
-      console.error('Failed to load affiliation:', err.message);
     }
-  };
+  } catch (err: any) {
+    console.error('Failed to load affiliation:', err.message);
+  }
+};
 
-  // Send Request to Supervisor
-  const requestAffiliation = async () => {
-    if (!selectedSupervisorId.value || !authStore.user?.id) return;
-    linkingLoading.value = true;
-    linkFeedback.value = null;
+// Send Request to Supervisor
+const requestAffiliation = async () => {
+  if (!selectedSupervisorId.value || !authStore.user?.id) return;
+  linkingLoading.value = true;
+  linkFeedback.value = null;
 
-    try {
-      const { error } = await supabase.from('intern_supervisor_links').insert({
-        intern_id: authStore.user.id,
-        supervisor_id: selectedSupervisorId.value,
-        status: 'pending',
-      });
+  try {
+    const { error } = await supabase.from('intern_supervisor_links').insert({
+      intern_id: authStore.user.id,
+      supervisor_id: selectedSupervisorId.value,
+      status: 'pending',
+    });
 
-      if (error) throw error;
-      internLinkStatus.value = 'pending';
-      linkFeedback.value = {
-        type: 'success',
-        message: 'Request sent! Waiting for supervisor approval.',
-      };
-    } catch (err: any) {
-      linkFeedback.value = {
-        type: 'error',
-        message: err.message || 'Failed to submit affiliation request.',
-      };
-    } finally {
-      linkingLoading.value = false;
+    if (error) throw error;
+    internLinkStatus.value = 'pending';
+    linkFeedback.value = {
+      type: 'success',
+      message: 'Request sent! Waiting for supervisor approval.',
+    };
+  } catch (err: any) {
+    linkFeedback.value = {
+      type: 'error',
+      message: err.message || 'Failed to submit affiliation request.',
+    };
+  } finally {
+    linkingLoading.value = false;
+  }
+};
+
+// Reset affiliation para makapag-apply sa ibang supervisor
+const resetAffiliationRequest = async () => {
+  if (!authStore.user?.id) return;
+  linkingLoading.value = true;
+  linkFeedback.value = null;
+
+  try {
+    const { error } = await supabase
+      .from('intern_supervisor_links')
+      .delete()
+      .eq('intern_id', authStore.user.id);
+
+    if (error) throw error;
+    internLinkStatus.value = 'none';
+    selectedSupervisorId.value = null;
+    await fetchAffiliation();
+  } catch (err: any) {
+    linkFeedback.value = {
+      type: 'error',
+      message: err.message || 'Failed to reset request.',
+    };
+  } finally {
+    linkingLoading.value = false;
+  }
+};
+
+// Haversine formula para sa distansya sa metro
+const computeDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+  const R = 6371e3;
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+};
+
+const handleAttendanceAction = async () => {
+  if (!authStore.user?.id) return;
+
+  try {
+    const site = supervisorSite.value;
+    if (!site?.latitude || !site?.longitude || !site?.radius_meters) {
+      alert('No authorized workplace geofence configured yet. Please contact your supervisor.');
+      return;
     }
-  };
 
-      // Reset affiliation para makapag-apply sa ibang supervisor
-    const resetAffiliationRequest = async () => {
-      if (!authStore.user?.id) return;
-      linkingLoading.value = true;
-      linkFeedback.value = null;
+    await refreshLocation();
+    const internLat = coordinates.value?.latitude;
+    const internLng = coordinates.value?.longitude;
 
-      try {
-        const { error } = await supabase
-          .from('intern_supervisor_links')
-          .delete()
-          .eq('intern_id', authStore.user.id);
+    if (!internLat || !internLng) {
+      alert('Unable to detect current GPS location. Please check device location permissions.');
+      return;
+    }
 
-        if (error) throw error;
-        internLinkStatus.value = 'none';
-        selectedSupervisorId.value = null;
-        await fetchAffiliation();
-      } catch (err: any) {
-        linkFeedback.value = {
-          type: 'error',
-          message: err.message || 'Failed to reset request.',
-        };
-      } finally {
-        linkingLoading.value = false;
+    const distanceMeters = computeDistanceMeters(
+      internLat,
+      internLng,
+      site.latitude,
+      site.longitude
+    );
+
+    if (distanceMeters > site.radius_meters) {
+      geofenceError.value = {
+        isOpen: true,
+        companyName: site.company_name || 'Designated Office',
+        formattedDistance: `${Math.round(distanceMeters)}m away`,
+        allowedRadius: site.radius_meters,
+      };
+      return;
+    }
+
+    if (currentStatus.value === 'on_duty') {
+      if (typeof (attendanceStore as any).timeOut === 'function') {
+        await (attendanceStore as any).timeOut({
+          internId: authStore.user.id,
+          latitude: internLat,
+          longitude: internLng,
+        });
       }
-    };
-// Haversine formula para sa eksaktong distansya sa metro
-  const computeDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371e3; // Earth radius sa metro
-    const φ1 = (lat1 * Math.PI) / 180;
-    const φ2 = (lat2 * Math.PI) / 180;
-    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-
-    const a =
-      Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return R * c;
-  };
-
-    const handleAttendanceAction = async () => {
-      if (!authStore.user?.id) return;
-
-      try {
-        // 1. Kuhanin ang active company site geofence perimeter
-        const site = supervisorSite.value;
-        if (!site?.latitude || !site?.longitude || !site?.radius_meters) {
-          alert('No authorized workplace geofence configured yet. Please contact your supervisor.');
-          return;
-        }
-
-        // 2. I-refresh at kuhanin ang kasalukuyang GPS coordinates ng intern
-        await refreshLocation();
-        const internLat = coordinates.value?.latitude;
-        const internLng = coordinates.value?.longitude;
-
-        if (!internLat || !internLng) {
-          alert('Unable to detect current GPS location. Please check device location permissions.');
-          return;
-        }
-
-        // 3. Kalkulahin ang distansya gamit ang Haversine formula
-        const distanceMeters = computeDistanceMeters(
-          internLat,
-          internLng,
-          site.latitude,
-          site.longitude
-        );
-
-        // 4. Geofence boundary check (may bisa sa parehong CLOCK IN at CLOCK OUT)
-        if (distanceMeters > site.radius_meters) {
-          geofenceError.value = {
-            isOpen: true,
-            companyName: site.company_name || 'Designated Office',
-            formattedDistance: `${Math.round(distanceMeters)}m away`,
-            allowedRadius: site.radius_meters,
-          };
-          return;
-        }
-
-        // 5. Attendance Actions batay sa status ng shift
-        if (currentStatus.value === 'on_duty') {
-          // CLOCK OUT (Within perimeter verified)
-          if (typeof (attendanceStore as any).timeOut === 'function') {
-            await (attendanceStore as any).timeOut({
-              internId: authStore.user.id,
-              latitude: internLat,
-              longitude: internLng,
-            });
-          }
-        } else {
-          // CLOCK IN (Within perimeter verified)
-          if (typeof (attendanceStore as any).timeIn === 'function') {
-            await (attendanceStore as any).timeIn({
-              internId: authStore.user.id,
-              supervisorId: site.supervisor_id,
-              latitude: internLat,
-              longitude: internLng,
-            });
-          }
-        }
-
-        await refreshData();
-      } catch (err: any) {
-        alert(`GPS or Attendance error: ${err.message || 'Failed to verify location.'}`);
+    } else {
+      if (typeof (attendanceStore as any).timeIn === 'function') {
+        await (attendanceStore as any).timeIn({
+          internId: authStore.user.id,
+          supervisorId: site.supervisor_id,
+          latitude: internLat,
+          longitude: internLng,
+        });
       }
-    };
+    }
 
-  // Inspect Attached Proof
-  const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: string) => {
-    activeProofUrl.value = url;
-    activeProofType.value = type;
-    activeProofTitle.value = title;
-    isProofViewerOpen.value = true;
-  };
+    await refreshData();
+  } catch (err: any) {
+    alert(`GPS or Attendance error: ${err.message || 'Failed to verify location.'}`);
+  }
+};
 
-  const refreshData = async () => {
-    if (!authStore.user?.id) return;
+const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: string) => {
+  activeProofUrl.value = url;
+  activeProofType.value = type;
+  activeProofTitle.value = title;
+  isProofViewerOpen.value = true;
+};
 
-    const loadHistory =
-      (attendanceStore as any).fetchAttendanceHistory ||
-      (attendanceStore as any).fetchInternLogs ||
-      (attendanceStore as any).fetchHistory;
+const handleSignOut = async () => {
+  isSigningOut.value = true;
+  try {
+    await authStore.signOut();
+    showSignOutConfirm.value = false;
+    router.push('/auth');
+  } catch (err: any) {
+    console.error('Sign out error:', err.message);
+  } finally {
+    isSigningOut.value = false;
+  }
+};
 
-    await Promise.all([
-      fetchAffiliation(),
-      attendanceStore.fetchTodayShift(authStore.user.id),
-      typeof loadHistory === 'function' ? loadHistory(authStore.user.id) : Promise.resolve(),
-      accomplishmentsStore.fetchInternLogs(authStore.user.id),
-    ]);
-  };
+const refreshData = async () => {
+  if (!authStore.user?.id) return;
 
-  onMounted(async () => {
+  const loadHistory =
+    (attendanceStore as any).fetchAttendanceHistory ||
+    (attendanceStore as any).fetchInternLogs ||
+    (attendanceStore as any).fetchHistory;
+
+  await Promise.allSettled([
+    fetchAffiliation(),
+    attendanceStore.fetchTodayShift(authStore.user.id),
+    typeof loadHistory === 'function' ? loadHistory(authStore.user.id) : Promise.resolve(),
+    accomplishmentsStore.fetchInternLogs(authStore.user.id),
+  ]);
+};
+
+onMounted(async () => {
+  isInitialLoading.value = true;
+  try {
     await authStore.fetchProfile();
     if (!authStore.isAuthenticated || !authStore.isIntern || !authStore.user) {
       router.push('/auth');
       return;
     }
     await refreshData();
-  });
 
-  onMounted(async () => {
-  await authStore.fetchProfile();
-  if (!authStore.isAuthenticated || !authStore.isIntern || !authStore.user) {
-    router.push('/auth');
-    return;
-  }
-  await refreshData();
-
-  // Subaybayan ang live updates sa attendance_logs at accomplishment_reports
-  if (authStore.user?.id) {
-    realtimeChannel = supabase
-      .channel(`intern-live-${authStore.user.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'attendance_logs',
-          filter: `intern_id=eq.${authStore.user.id}`,
-        },
-        () => {
-          refreshData();
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'accomplishment_reports',
-          filter: `intern_id=eq.${authStore.user.id}`,
-        },
-        () => {
-          refreshData();
-        }
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'intern_supervisor_links',
-          filter: `intern_id=eq.${authStore.user.id}`,
-        },
-        () => {
-          fetchAffiliation();
-        }
-      )
-      .subscribe();
+    // Supabase Real-Time Subscriptions
+    if (authStore.user?.id) {
+      realtimeChannel = supabase
+        .channel(`intern-live-${authStore.user.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'attendance_logs',
+            filter: `intern_id=eq.${authStore.user.id}`,
+          },
+          () => {
+            refreshData();
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'accomplishment_reports',
+            filter: `intern_id=eq.${authStore.user.id}`,
+          },
+          () => {
+            refreshData();
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'intern_supervisor_links',
+            filter: `intern_id=eq.${authStore.user.id}`,
+          },
+          () => {
+            fetchAffiliation();
+          }
+        )
+        .subscribe();
+    }
+  } finally {
+    isInitialLoading.value = false;
   }
 });
 
@@ -350,50 +385,58 @@ onUnmounted(() => {
     supabase.removeChannel(realtimeChannel);
   }
 });
-  </script>
+</script>
 
-  <template>
-    <main class="trainext-page-shell">
-      <div class="trainext-bg-railway" aria-hidden="true"></div>
-      <div class="trainext-bg-overlay" aria-hidden="true"></div>
+<template>
+  <main class="trainext-page-shell">
+    <div class="trainext-bg-railway" aria-hidden="true"></div>
+    <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
-      <div class="trainext-container-layout">
-        <!-- HEADER BAR -->
-        <header class="trainext-glass-card trainext-header-bar">
-          <div class="trainext-brand-group">
-            <img src="/assets/trainext-logo.png" alt="TraiNext" class="trainext-logo-mini" />
-            <div>
-              <span class="trainext-badge-role">Trainee Station</span>
-              <h1 class="trainext-heading-name">{{ authStore.user?.full_name || 'Intern Trainee' }}</h1>
-            </div>
+    <div class="trainext-container-layout">
+      <!-- HEADER BAR -->
+      <header class="trainext-glass-card trainext-header-bar">
+        <div class="trainext-brand-group">
+          <img src="/assets/trainext-logo.png" alt="TraiNext" class="trainext-logo-mini" />
+          <div>
+            <span class="trainext-badge-role">Trainee Station</span>
+            <h1 class="trainext-heading-name">{{ authStore.user?.full_name || 'Intern Trainee' }}</h1>
           </div>
+        </div>
 
-          <div class="flex items-center gap-2">
-            <button 
-              type="button" 
-              @click="isProfileSettingsOpen = true"
-              class="px-3.5 py-1.5 rounded-full border border-white/20 text-xs text-slate-300 hover:text-white hover:border-[#00d9ff]/50 transition flex items-center gap-1.5 cursor-pointer"
-              title="Account Settings"
-            >
-              <svg class="w-3.5 h-3.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-              </svg>
-              <span class="hidden sm:inline">Settings</span>
-            </button>
+        <div class="flex items-center gap-2">
+          <button 
+            type="button" 
+            @click="isProfileSettingsOpen = true"
+            class="px-3.5 py-1.5 rounded-full border border-white/20 text-xs text-slate-300 hover:text-white hover:border-[#00d9ff]/50 transition flex items-center gap-1.5 cursor-pointer"
+            title="Account Settings"
+          >
+            <svg class="w-3.5 h-3.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            </svg>
+            <span class="hidden sm:inline">Settings</span>
+          </button>
 
-            <button 
-              type="button" 
-              @click="authStore.signOut(); router.push('/auth');"
-              class="trainext-btn-signout"
-            >
-              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
-              <span>Sign Out</span>
-            </button>
-          </div>
-        </header>
+          <!-- SIGN OUT BUTTON WITH CONFIRMATION TRIGGER -->
+          <button 
+            type="button" 
+            @click="showSignOutConfirm = true"
+            class="trainext-btn-signout"
+          >
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            <span>Sign Out</span>
+          </button>
+        </div>
+      </header>
 
+      <!-- INITIAL PAGE LOADER -->
+      <div v-if="isInitialLoading" class="trainext-glass-card p-12 text-center flex flex-col items-center justify-center gap-3">
+        <div class="w-8 h-8 rounded-full border-2 border-[#00d9ff]/20 border-t-[#00d9ff] animate-spin"></div>
+        <p class="text-xs text-slate-300 tracking-wider uppercase font-semibold">Synchronizing Trainee Profile...</p>
+      </div>
+
+      <template v-else>
         <!-- AFFILIATION BANNER -->
         <section v-if="internLinkStatus !== 'approved'" class="trainext-glass-card flex flex-col gap-3">
           <div class="flex items-center gap-3">
@@ -409,52 +452,56 @@ onUnmounted(() => {
           <div v-if="linkFeedback" class="p-2.5 rounded-xl text-xs" :class="linkFeedback.type === 'success' ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-300' : 'bg-red-950/60 border border-red-500/40 text-red-300'">
             {{ linkFeedback.message }}
           </div>
-        <!-- REJECTED STATE -->
-              <div v-if="internLinkStatus === 'rejected'" class="flex flex-col gap-2 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30">
-                <div class="flex items-center gap-2 text-rose-300 font-semibold text-xs">
-                  <svg class="w-4 h-4 shrink-0 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <circle cx="12" cy="12" r="10" />
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 9l-6 6M9 9l6 6" />
-                  </svg>
-                  <span>Affiliation Request Declined</span>
-                </div>
-                <p class="text-[11px] text-slate-300 leading-relaxed">
-                  Your previous request to link with the selected company supervisor was declined. You can select another supervisor from the directory to proceed.
-                </p>
-                <div class="pt-1">
-                  <button
-                    type="button"
-                    @click="resetAffiliationRequest"
-                    :disabled="linkingLoading"
-                    class="px-3.5 py-1.5 rounded-full border border-rose-500/50 text-xs text-rose-200 hover:bg-rose-500/20 transition cursor-pointer"
-                  >
-                    {{ linkingLoading ? 'Resetting...' : 'Choose Another Supervisor' }}
-                  </button>
-                </div>
-              </div>
-          <div v-if="internLinkStatus === 'pending'" class="flex items-center gap-2.5 p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30">
+
+          <!-- REJECTED STATE -->
+          <div v-if="internLinkStatus === 'rejected'" class="flex flex-col gap-2 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30">
+            <div class="flex items-center gap-2 text-rose-300 font-semibold text-xs">
+              <svg class="w-4 h-4 shrink-0 text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <circle cx="12" cy="12" r="10" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 9l-6 6M9 9l6 6" />
+              </svg>
+              <span>Affiliation Request Declined</span>
+            </div>
+            <p class="text-[11px] text-slate-300 leading-relaxed">
+              Your previous request to link with the selected company supervisor was declined. You can select another supervisor from the directory to proceed.
+            </p>
+            <div class="pt-1">
+              <button
+                type="button"
+                @click="resetAffiliationRequest"
+                :disabled="linkingLoading"
+                class="px-3.5 py-1.5 rounded-full border border-rose-500/50 text-xs text-rose-200 hover:bg-rose-500/20 transition cursor-pointer"
+              >
+                {{ linkingLoading ? 'Resetting...' : 'Choose Another Supervisor' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- PENDING STATE -->
+          <div v-else-if="internLinkStatus === 'pending'" class="flex items-center gap-2.5 p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30">
             <span class="w-2 h-2 rounded-full bg-[#00d9ff] animate-ping"></span>
             <p class="text-xs text-slate-200">Your request is currently awaiting supervisor verification and geofence activation.</p>
           </div>
 
+          <!-- NONE / SELECT SUPERVISOR -->
           <div v-else-if="internLinkStatus === 'none'" class="flex flex-col gap-1.5 pt-1">
             <label class="trainext-label">SELECT SUPERVISOR</label>
-            <div class="flex gap-2">
-              <select v-model="selectedSupervisorId" class="trainext-select-glass flex-1">
+            <div class="flex flex-col sm:flex-row gap-2">
+              <select v-model="selectedSupervisorId" class="trainext-select-glass flex-1 text-xs">
                 <option :value="null" disabled>Choose assigned company supervisor...</option>
                 <option 
                   v-for="sup in availableSupervisors" 
-                  :key="sup.id" 
-                  :value="sup.id"
+                  :key="sup.supervisor_id" 
+                  :value="sup.supervisor_id"
                 >
-                  {{ sup.full_name }} — {{ sup.company_sites?.[0]?.company_name || 'Direct Supervisor' }}
+                  {{ sup.full_name }} — {{ sup.company_name }}
                 </option>
               </select>
               <button 
                 type="button" 
                 @click="requestAffiliation"
                 :disabled="!selectedSupervisorId || linkingLoading"
-                class="trainext-btn-pill-primary px-5 text-xs"
+                class="trainext-btn-pill-primary px-5 h-10 text-xs shrink-0"
               >
                 {{ linkingLoading ? 'SENDING...' : 'CONNECT' }}
               </button>
@@ -659,51 +706,143 @@ onUnmounted(() => {
             </div>
           </div>
         </section>
+      </template>
 
-        <!-- FOOTER -->
-        <footer class="trainext-footer-tagline">
-          <span>Smart Tracking.</span>
-          <span>Real-Time Safety.</span>
-        </footer>
+      <!-- FOOTER -->
+      <footer class="trainext-footer-tagline">
+        <span>Smart Tracking.</span>
+        <span>Real-Time Safety.</span>
+      </footer>
+    </div>
+    <!-- SIGN OUT CONFIRMATION MODAL -->
+    <div
+      v-if="showSignOutConfirm"
+      class="fixed inset-0 z-50 flex items-center justify-center
+            bg-[#05070b]/75 p-4 backdrop-blur-md"
+    >
+      <div
+        class="trainext-glass-card relative w-full max-w-sm
+              overflow-hidden rounded-2xl border border-cyan-400/20
+              bg-[#0b1019]/95 p-6
+              shadow-[0_0_40px_rgba(34,211,238,0.08)]
+              animate-in fade-in zoom-in-95 duration-200"
+      >
+        <!-- Subtle cyan accent -->
+        <div
+          class="absolute left-8 right-8 top-0 h-px
+                bg-gradient-to-r from-transparent
+                via-cyan-400/70 to-transparent"
+        ></div>
+
+        <!-- Header -->
+        <div class="flex items-start gap-4">
+          <div
+            class="flex h-11 w-11 shrink-0 items-center justify-center
+                  rounded-xl border border-rose-400/25
+                  bg-rose-400/10 text-rose-300"
+          >
+            <svg
+              class="h-5 w-5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+              />
+            </svg>
+          </div>
+
+          <div class="min-w-0 flex-1">
+            <h3 class="text-base font-semibold tracking-tight text-white">
+              Confirm Sign Out
+            </h3>
+            <p class="mt-1.5 text-sm leading-relaxed text-slate-400">
+              Are you sure you want to end your current session?
+            </p>
+          </div>
+        </div>
+
+        <!-- Divider and actions -->
+        <div class="mt-5 flex items-center justify-end gap-3
+                    border-t border-white/[0.08] pt-4">
+          <button
+            type="button"
+            @click="showSignOutConfirm = false"
+            :disabled="isSigningOut"
+            class="rounded-xl border border-white/10
+                  bg-white/[0.04] px-4 py-2.5
+                  text-sm font-medium text-slate-300
+                  transition-all duration-200
+                  hover:border-white/20 hover:bg-white/[0.08]
+                  hover:text-white
+                  focus-visible:outline-none
+                  focus-visible:ring-2 focus-visible:ring-cyan-400/50
+                  disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Cancel
+          </button>
+
+          <button
+            type="button"
+            @click="handleSignOut"
+            :disabled="isSigningOut"
+            class="rounded-xl border border-rose-400/30
+                  bg-rose-500/15 px-4 py-2.5
+                  text-sm font-semibold text-rose-300
+                  transition-all duration-200
+                  hover:border-rose-400/50 hover:bg-rose-500/25
+                  hover:shadow-[0_0_18px_rgba(244,63,94,0.12)]
+                  focus-visible:outline-none
+                  focus-visible:ring-2 focus-visible:ring-rose-400/50
+                  disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {{ isSigningOut ? 'Signing out...' : 'Yes, Sign Out' }}
+          </button>
+        </div>
       </div>
+    </div>
 
-      <!-- MODALS -->
-      <AccomplishmentModal 
-        :is-open="isAccomplishmentModalOpen"
-        :intern-id="authStore.user?.id || ''"
-        @close="isAccomplishmentModalOpen = false"
-        @saved="refreshData"
-      />
+    <!-- MODALS -->
+    <AccomplishmentModal 
+      :is-open="isAccomplishmentModalOpen"
+      :intern-id="authStore.user?.id || ''"
+      @close="isAccomplishmentModalOpen = false"
+      @saved="refreshData"
+    />
 
-      <ProfileSettingsModal 
-        :is-open="isProfileSettingsOpen"
-        @close="isProfileSettingsOpen = false"
-        @saved="authStore.fetchProfile()"
-      />
+    <ProfileSettingsModal 
+      :is-open="isProfileSettingsOpen"
+      @close="isProfileSettingsOpen = false"
+      @saved="authStore.fetchProfile()"
+    />
 
-      <SafeAtBaseModal 
-        :is-open="isSafeAtBaseModalOpen"
-        :log-id="currentShift?.id || ''"
-        :intern-id="authStore.user?.id || ''"
-        @close="isSafeAtBaseModalOpen = false"
-        @confirmed="refreshData"
-      />
+    <SafeAtBaseModal 
+      :is-open="isSafeAtBaseModalOpen"
+      :log-id="currentShift?.id || ''"
+      :intern-id="authStore.user?.id || ''"
+      @close="isSafeAtBaseModalOpen = false"
+      @confirmed="refreshData"
+    />
 
-      <ProofViewerModal 
-        :is-open="isProofViewerOpen"
-        :media-url="activeProofUrl"
-        :media-type="activeProofType"
-        :title="activeProofTitle"
-        @close="isProofViewerOpen = false"
-      />
+    <ProofViewerModal 
+      :is-open="isProofViewerOpen"
+      :media-url="activeProofUrl"
+      :media-type="activeProofType"
+      :title="activeProofTitle"
+      @close="isProofViewerOpen = false"
+    />
 
     <GeofenceErrorModal 
-          :is-open="geofenceError.isOpen"
-          :company-name="geofenceError.companyName"
-          :formatted-distance="geofenceError.formattedDistance"
-          :allowed-radius="geofenceError.allowedRadius"
-          @close="geofenceError.isOpen = false"
-          @retry="geofenceError.isOpen = false; handleAttendanceAction();"
-        />
-    </main>
-  </template>
+      :is-open="geofenceError.isOpen"
+      :company-name="geofenceError.companyName"
+      :formatted-distance="geofenceError.formattedDistance"
+      :allowed-radius="geofenceError.allowedRadius"
+      @close="geofenceError.isOpen = false"
+      @retry="geofenceError.isOpen = false; handleAttendanceAction();"
+    />
+  </main>
+</template>
