@@ -46,22 +46,21 @@ export interface InternSupervisorLink {
 }
 
 // 4. Attendance & Geofenced DTR Record
-export interface AttendanceLog {
-  id: string;
-  intern_id: string;
-  supervisor_id?: string;
-  date: string;
-  time_in: string;
-  time_in_lat?: number;
-  time_in_lng?: number;
-  time_out?: string | null;
-  hours_rendered: number;
-  status: AttendanceStatus;
-  safe_at_base_time?: string | null;
-  transit_waiver_agreed: boolean;
-  created_at?: string;
-  intern?: UserProfile;
-}
+  export interface AttendanceLog {
+    id: string;
+    intern_id: string;
+    supervisor_id?: string | null;
+    date: string;
+    time_in: string;
+    time_out?: string | null;
+    hours_rendered?: number;
+    status: 'on_duty' | 'in_transit' | 'safe_at_base' | 'completed' | 'absent';
+    safe_at_base_time?: string | null;
+    safe_location_lat?: number | null;
+    safe_location_lng?: number | null;
+    transit_notes?: string | null;
+    created_at?: string;
+  }
 
 // 5. Accomplishment Log with Multi-Proof Support
 export interface AccomplishmentLog {
