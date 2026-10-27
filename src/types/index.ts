@@ -1,6 +1,6 @@
 export type UserRole = 'intern' | 'supervisor' | 'coordinator';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';
-export type AttendanceStatus = 'on_duty' | 'in_transit' | 'safe_at_base';
+export type ShiftStatus = 'on_duty' | 'in_transit' | 'safe_at_base' | 'completed' | 'absent';
 
 // 1. Profile Type para sa lahat ng users
 export interface UserProfile {
