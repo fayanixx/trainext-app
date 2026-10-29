@@ -23,7 +23,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
   });
 
   /**
-   * 1. Fetch Today's Shift for Current Intern
+   * 1. Kunin ang shift ng intern para sa kasalukuyang araw
    */
   const fetchTodayShift = async (internId: string) => {
     if (!internId) return null;
@@ -55,58 +55,41 @@ export const useAttendanceStore = defineStore('attendance', () => {
   };
 
   /**
-   * 2. Log Geofenced Time-In
-   * Dual-payload mapping prevents NOT NULL constraint errors
+   * 2. Log Geofenced Time-In (Malinis na payload na tumutugma sa normalized schema)
    */
-  const logTimeIn = async (params: {
-    internId: string;
-    supervisorId?: string;
-    siteId?: string;
-    latitude: number;
-    longitude: number;
-  }) => {
-    loading.value = true;
-    errorMessage.value = null;
+    const logTimeIn = async (params: {
+        internId: string;
+        latitude: number;
+        longitude: number;
+        supervisorId?: string;
+        siteId?: string;
+      }) => {
+        loading.value = true;
+        errorMessage.value = null;
 
-    try {
-      const nowIso = new Date().toISOString();
-      const today = nowIso.split('T')[0];
+        try {
+          // Tawagin ang database function para sa anti-spoofing check
+          const { data, error } = await supabase.rpc('secure_clock_in', {
+            p_intern_id: params.internId,
+            p_latitude: params.latitude,
+            p_longitude: params.longitude,
+          });
 
-      const payload: any = {
-        intern_id: params.internId,
-        supervisor_id: params.supervisorId || null,
-        site_id: params.siteId || null,
-        date: today,
-        time_in: nowIso,
-        clock_in_at: nowIso,
-        time_in_lat: params.latitude,
-        time_in_lng: params.longitude,
-        clock_in_latitude: params.latitude,
-        clock_in_longitude: params.longitude,
-        status: 'on_duty',
-        hours_rendered: 0,
+          if (error) throw error;
+
+          activeShift.value = data.log as AttendanceLog;
+          await fetchAttendanceHistory(params.internId);
+          return activeShift.value;
+        } catch (err: any) {
+          errorMessage.value = err.message || 'Failed to record Time In.';
+          throw err;
+        } finally {
+          loading.value = false;
+        }
       };
 
-      const { data, error } = await supabase
-        .from('attendance_logs')
-        .insert(payload)
-        .select()
-        .single();
-
-      if (error) throw error;
-      activeShift.value = data as AttendanceLog;
-      await fetchAttendanceHistory(params.internId);
-      return activeShift.value;
-    } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to record Time In.';
-      throw err;
-    } finally {
-      loading.value = false;
-    }
-  };
-
   /**
-   * 3. Log Time-Out and Automatically Transition to 'in_transit' Status
+   * 3. Log Time-Out at Awtomatikong mag-transition sa 'in_transit' status
    */
   const logTimeOut = async (params?: {
     internId?: string;
@@ -124,7 +107,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
       const timeOutIso = new Date().toISOString();
       let rendered = 0;
 
-      const startTime = activeShift.value.time_in || (activeShift.value as any).clock_in_at;
+      const startTime = activeShift.value.time_in;
       if (typeof calculateHoursRendered === 'function' && startTime) {
         rendered = calculateHoursRendered(startTime, timeOutIso);
       } else if (startTime) {
@@ -132,20 +115,17 @@ export const useAttendanceStore = defineStore('attendance', () => {
         rendered = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
       }
 
-      const updatePayload: any = {
+      const updatePayload: Record<string, any> = {
         time_out: timeOutIso,
-        clock_out_at: timeOutIso,
         hours_rendered: rendered,
         status: 'in_transit',
       };
 
       if (params?.latitude !== undefined) {
         updatePayload.time_out_lat = params.latitude;
-        updatePayload.clock_out_latitude = params.latitude;
       }
       if (params?.longitude !== undefined) {
         updatePayload.time_out_lng = params.longitude;
-        updatePayload.clock_out_longitude = params.longitude;
       }
 
       const { data, error } = await supabase
@@ -193,7 +173,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
     try {
       const safeTimeIso = new Date().toISOString();
 
-      const updatePayload: any = {
+      const updatePayload: Record<string, any> = {
         status: 'safe_at_base',
         safe_at_base_time: safeTimeIso,
         transit_waiver_agreed: true,
@@ -234,7 +214,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
   };
 
   /**
-   * 5. Fetch Intern Attendance History
+   * 5. Kunin ang attendance history ng intern
    */
   const fetchAttendanceHistory = async (internId: string) => {
     if (!internId) return [];

@@ -1,22 +1,30 @@
 export interface TraineeExportRow {
   fullName: string;
-  contactNumber: string;
-  emergencyContact: string;
-  emergencyNumber: string;
+  email?: string;
+  contactNumber?: string;
+  emergencyContact?: string;
+  emergencyNumber?: string;
   supervisorName: string;
   companyName: string;
   totalRenderedHours: number;
   affiliationStatus: string;
 }
 
+export interface IndividualLogRecord {
+  date: string;
+  time_in?: string | null;
+  time_out?: string | null;
+  hours_rendered?: number;
+  status: string;
+  safe_at_base_time?: string | null;
+  transit_notes?: string | null;
+}
+
 /**
- * Converts an array of objects into a downloaded CSV file
+ * CSV Exporter Utility
  */
 export function exportToCsv(filename: string, rows: Record<string, any>[]): void {
-  if (!rows || !rows.length) {
-    alert('No data available to export.');
-    return;
-  }
+  if (!rows || !rows.length) return;
 
   const separator = ',';
   const keys = Object.keys(rows[0]);
@@ -52,111 +60,74 @@ export function exportToCsv(filename: string, rows: Record<string, any>[]): void
 }
 
 /**
- * Triggers a clean printable HTML document for saving as PDF
+ * 1. PANG-LAHATAN: Coordinator Master Summary Report HTML
  */
-export function printSummaryReport(params: {
+export function generateMasterReportHtml(params: {
   coordinatorName: string;
-  batchTitle: string;
+  batchTitle?: string;
   data: TraineeExportRow[];
-}): void {
-  const printWindow = window.open('', '_blank');
-  if (!printWindow) {
-    alert('Pop-up blocked. Please allow pop-ups to generate printable report.');
-    return;
-  }
-
+}): string {
   const rowsHtml = params.data
     .map(
       (item, index) => `
       <tr>
-        <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center;">${index + 1}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: bold;">${item.fullName}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-weight: bold;">${index + 1}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: 700; color: #0f172a;">${item.fullName}</td>
         <td style="border: 1px solid #cbd5e1; padding: 8px;">${item.companyName}</td>
         <td style="border: 1px solid #cbd5e1; padding: 8px;">${item.supervisorName}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-weight: bold;">${item.totalRenderedHours} hrs</td>
-        <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center;">${item.affiliationStatus.toUpperCase()}</td>
+        <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-weight: bold; color: #0284c7;">
+          ${Number(item.totalRenderedHours || 0).toFixed(1)} hrs
+        </td>
+      <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center;">
+          <span style="display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; ${
+            item.affiliationStatus === 'COMPLETED'
+              ? 'background: #dcfce7; color: #15803d; border: 1px solid #86efac;'
+              : 'background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1;'
+          }">
+            ${item.affiliationStatus}
+          </span>
+        </td>
       </tr>
     `
     )
     .join('');
 
-  const reportHtml = `
+  return `
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
       <head>
-        <title>TraiNext OJT Summary Report</title>
+        <meta charset="UTF-8">
+        <title>TraiNext — OJT Cohort Master Summary Report</title>
         <style>
-          body {
-            font-family: Arial, sans-serif;
-            color: #0f172a;
-            margin: 20px;
-            font-size: 12px;
-          }
-          .header {
-            text-align: center;
-            border-bottom: 2px solid #0f172a;
-            padding-bottom: 15px;
-            margin-bottom: 20px;
-          }
-          .title {
-            font-size: 18px;
-            font-weight: bold;
-            margin: 0;
-            text-transform: uppercase;
-          }
-          .meta {
-            margin-top: 5px;
-            font-size: 11px;
-            color: #475569;
-          }
-          table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 30px;
-          }
-          th {
-            background-color: #f1f5f9;
-            border: 1px solid #cbd5e1;
-            padding: 8px;
-            text-align: left;
-            font-size: 11px;
-            text-transform: uppercase;
-          }
-          .signatures {
-            margin-top: 50px;
-            display: flex;
-            justify-content: space-between;
-          }
-          .sign-col {
-            width: 40%;
-            text-align: center;
-          }
-          .sign-line {
-            border-top: 1px solid #0f172a;
-            margin-top: 40px;
-            padding-top: 5px;
-            font-weight: bold;
-          }
-          @media print {
-            button { display: none; }
-          }
+          @page { size: portrait; margin: 15mm; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; padding: 24px; font-size: 11px; background: #fff; }
+          .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 20px; }
+          .title { font-size: 16px; font-weight: 800; text-transform: uppercase; margin: 0; }
+          .subtitle { font-size: 12px; font-weight: 600; color: #0284c7; margin: 4px 0 0; }
+          .meta { margin-top: 6px; font-size: 10px; color: #64748b; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+          th { background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 8px; text-align: left; font-size: 10px; font-weight: 800; text-transform: uppercase; color: #475569; }
+          .signatures { margin-top: 45px; display: flex; justify-content: space-between; }
+          .sign-col { width: 42%; text-align: center; }
+          .sign-line { border-top: 1px solid #0f172a; margin-top: 45px; padding-top: 5px; font-weight: 700; font-size: 12px; }
         </style>
       </head>
       <body>
         <div class="header">
-          <div class="title">TraiNext OJT Trainee Batch Accomplishment Report</div>
-          <div class="meta">Generated: ${new Date().toLocaleDateString()} | Coordinator: ${params.coordinatorName}</div>
+          <div class="title">TraiNext OJT Trainee Master Summary Audit</div>
+          <div class="subtitle">${params.batchTitle || 'Academic Practicum Monitoring Records'}</div>
+          <div class="meta">Date Generated: ${new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })} | Coordinator: ${params.coordinatorName}</div>
         </div>
 
         <table>
           <thead>
             <tr>
-              <th style="text-align: center; width: 40px;">#</th>
+              <th style="text-align: center; width: 35px;">#</th>
               <th>Trainee Name</th>
-              <th>Host Company</th>
-              <th>Supervisor</th>
-              <th style="text-align: center;">Total Rendered</th>
-              <th style="text-align: center;">Status</th>
+              <th>Host Training Company</th>
+              <th>Designated Supervisor</th>
+              <th style="text-align: center; width: 110px;">Rendered Hours</th>
+              <th style="text-align: center; width: 90px;">Status</th>
             </tr>
           </thead>
           <tbody>
@@ -168,24 +139,130 @@ export function printSummaryReport(params: {
           <div class="sign-col">
             <div>Prepared by:</div>
             <div class="sign-line">${params.coordinatorName}</div>
-            <div style="font-size: 10px; color: #475569;">OJT Coordinator</div>
+            <div style="font-size: 10px; color: #64748b;">OJT Academic Coordinator</div>
           </div>
           <div class="sign-col">
             <div>Noted by:</div>
-            <div class="sign-line">Department Dean / Program Head</div>
-            <div style="font-size: 10px; color: #475569;">College of Information Technology</div>
+            <div class="sign-line">Dean / Department Chair</div>
+            <div style="font-size: 10px; color: #64748b;">College of Information Technology</div>
           </div>
         </div>
       </body>
     </html>
   `;
+}
 
-  printWindow.document.open();
-  printWindow.document.write(reportHtml);
-  printWindow.document.close();
+/**
+ * 2. PANG-ISA-ISA: Individual Trainee DTR & Transit Safety Accountability Log HTML
+ */
+export function generateIndividualDtrHtml(params: {
+  internName: string;
+  companyName: string;
+  supervisorName: string;
+  contactNumber?: string;
+  coordinatorName: string;
+  totalRendered: number;
+  logs: IndividualLogRecord[];
+}): string {
+  const formatTime = (isoString?: string | null) => {
+    if (!isoString) return '—';
+    try {
+      return new Date(isoString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '—';
+    }
+  };
 
-  setTimeout(() => {
-    printWindow.focus();
-    printWindow.print();
-  }, 400);
+  const rowsHtml = params.logs.length === 0 
+    ? `<tr><td colspan="6" style="text-align: center; padding: 15px; color: #94a3b8;">No official duty logs recorded yet.</td></tr>`
+    : params.logs
+        .map(
+          (log, index) => `
+        <tr>
+          <td style="border: 1px solid #cbd5e1; padding: 6px; text-align: center; font-weight: bold;">${index + 1}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 6px; font-family: monospace; font-size: 11px;">${log.date}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 6px; font-family: monospace; text-align: center;">${formatTime(log.time_in)}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 6px; font-family: monospace; text-align: center;">${formatTime(log.time_out)}</td>
+          <td style="border: 1px solid #cbd5e1; padding: 6px; text-align: center; font-weight: bold; color: #0284c7;">
+            ${Number(log.hours_rendered || 0).toFixed(1)} hrs
+          </td>
+          <td style="border: 1px solid #cbd5e1; padding: 6px; font-size: 10px;">
+            ${
+              log.safe_at_base_time
+                ? `<span style="color: #059669; font-weight: bold;">✓ Safe: ${formatTime(log.safe_at_base_time)}</span>`
+                : `<span style="color: #d97706; font-weight: 600;">Pending Confirmation</span>`
+            }
+            ${log.transit_notes ? `<div style="font-size: 9px; color: #64748b; margin-top: 2px;">Note: ${log.transit_notes}</div>` : ''}
+          </td>
+        </tr>
+      `
+        )
+        .join('');
+
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <title>TraiNext Individual DTR — ${params.internName}</title>
+        <style>
+          @page { size: portrait; margin: 15mm; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; padding: 24px; font-size: 11px; background: #fff; }
+          .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 16px; }
+          .title { font-size: 16px; font-weight: 800; text-transform: uppercase; margin: 0; }
+          .subtitle { font-size: 12px; font-weight: 600; color: #0284c7; margin: 4px 0 0; }
+          .profile-box { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; margin-bottom: 20px; font-size: 11px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+          th { background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 8px 6px; text-align: left; font-size: 10px; font-weight: 800; text-transform: uppercase; color: #475569; }
+          .signatures { margin-top: 45px; display: flex; justify-content: space-between; }
+          .sign-col { width: 42%; text-align: center; }
+          .sign-line { border-top: 1px solid #0f172a; margin-top: 45px; padding-top: 5px; font-weight: 700; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="title">Individual Trainee Daily Time Record & Safety Audit</div>
+          <div class="subtitle">TraiNext Geofenced Attendance & Base Transit Verification</div>
+        </div>
+
+        <div class="profile-box">
+          <div><strong>Trainee Name:</strong> ${params.internName}</div>
+          <div><strong>Total Hours Rendered:</strong> <span style="color: #0284c7; font-weight: bold;">${params.totalRendered.toFixed(1)} hrs</span></div>
+          <div><strong>Host Training Company:</strong> ${params.companyName}</div>
+          <div><strong>Company Supervisor:</strong> ${params.supervisorName}</div>
+          <div><strong>Contact Number:</strong> ${params.contactNumber || 'N/A'}</div>
+          <div><strong>OJT Coordinator:</strong> ${params.coordinatorName}</div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="text-align: center; width: 30px;">#</th>
+              <th style="width: 80px;">Date</th>
+              <th style="text-align: center; width: 75px;">Time In</th>
+              <th style="text-align: center; width: 75px;">Time Out</th>
+              <th style="text-align: center; width: 90px;">Rendered</th>
+              <th>Safe at Base Transit Verification</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+
+        <div class="signatures">
+          <div class="sign-col">
+            <div>Verified & Concurred by:</div>
+            <div class="sign-line">${params.supervisorName}</div>
+            <div style="font-size: 10px; color: #64748b;">Industry Supervisor Signature</div>
+          </div>
+          <div class="sign-col">
+            <div>Noted & Audited by:</div>
+            <div class="sign-line">${params.coordinatorName}</div>
+            <div style="font-size: 10px; color: #64748b;">OJT Academic Coordinator Signature</div>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
 }

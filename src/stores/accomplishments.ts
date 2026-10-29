@@ -9,8 +9,7 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
   const loading = ref(false);
   const errorMessage = ref<string | null>(null);
 
-  const BUCKET_NAME = 'accomplishment-proofs';
-
+  const BUCKET_NAME = 'proofs';
   const uploadProofFile = async (
     file: File,
     folder: 'images' | 'documents' | 'videos'

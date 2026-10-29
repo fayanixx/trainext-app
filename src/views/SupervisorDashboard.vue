@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useAccomplishmentsStore } from '@/stores/accomplishments';
+import { useToast } from '@/composables/useToast';
 import { sendStatusEmail } from '@/lib/email';
 import type { CompanySite } from '@/types';
 import OfficeGeofenceModal from '@/components/OfficeGeofenceModal.vue';
@@ -14,6 +15,7 @@ let supervisorRealtimeChannel: any = null;
 const router = useRouter();
 const authStore = useAuthStore();
 const accomplishmentsStore = useAccomplishmentsStore();
+const toast = useToast();
 
 // Modals State
 const isProfileSettingsOpen = ref(false);
@@ -110,8 +112,14 @@ const respondToIntern = async (linkId: string, status: 'approved' | 'rejected') 
 
     if (error) throw error;
     await fetchInterns();
+
+    if (status === 'approved') {
+      toast.success('Intern accepted and linked to company perimeter.', 'AFFILIATION ACCEPTED');
+    } else {
+      toast.info('Intern affiliation request declined.', 'REQUEST DECLINED');
+    }
   } catch (err: any) {
-    alert(`Failed to update intern status: ${err.message}`);
+    toast.error(err.message || 'Failed to update intern status.', 'ACTION FAILED');
   }
 };
 
@@ -145,8 +153,14 @@ const handleReview = async (logId: string, status: 'approved' | 'rejected') => {
     if (authStore.user?.id) {
       await accomplishmentsStore.fetchSupervisorLogs(authStore.user.id);
     }
+
+    if (status === 'approved') {
+      toast.success('Report approved and notification sent to trainee.', 'REPORT APPROVED');
+    } else {
+      toast.warning('Report marked as rejected with supervisor remarks.', 'REPORT REJECTED');
+    }
   } catch (err: any) {
-    alert(`Review failed: ${err.message}`);
+    toast.error(err.message || 'Review action failed.', 'REVIEW ERROR');
   }
 };
 
@@ -163,6 +177,7 @@ const toggleSelectAll = () => {
 const handleBatchApprove = async () => {
   if (selectedBatchIds.value.length === 0) return;
   isBatchProcessing.value = true;
+  const count = selectedBatchIds.value.length;
   try {
     const logsToApprove: any[] = allLogs.value.filter((l: any) => selectedBatchIds.value.includes(l.id));
 
@@ -191,8 +206,10 @@ const handleBatchApprove = async () => {
     if (authStore.user?.id) {
       await accomplishmentsStore.fetchSupervisorLogs(authStore.user.id);
     }
+
+    toast.success(`Successfully batch approved ${count} accomplishment reports.`, 'BATCH COMPLETE');
   } catch (err: any) {
-    alert(`Batch approval error: ${err.message}`);
+    toast.error(err.message || 'Batch approval encountered an issue.', 'BATCH ERROR');
   } finally {
     isBatchProcessing.value = false;
   }
