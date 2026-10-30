@@ -60,6 +60,9 @@ const availableSupervisors = ref<any[]>([]);
 const linkingLoading = ref(false);
 const isInitialLoading = ref(true);
 
+// Instant Click Visual Feedback State para sa Clock In/Out
+const isVerifying = ref(false);
+
 // Live Timer State
 const elapsedTimeText = ref('00h 00m 00s');
 
@@ -313,7 +316,9 @@ const computeDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: n
 };
 
 const handleAttendanceAction = async () => {
-  if (!authStore.user?.id) return;
+  if (!authStore.user?.id || isVerifying.value || attendanceStore.loading) return;
+
+  isVerifying.value = true;
 
   try {
     const site = supervisorSite.value;
@@ -327,7 +332,7 @@ const handleAttendanceAction = async () => {
     const internLng = coordinates.value?.longitude;
 
     if (!internLat || !internLng) {
-      toast.error('Unable to detect current GPS location.', 'GPS UNAVAILABLE');
+      toast.error('Unable to detect current GPS location. Please check device location settings.', 'GPS UNAVAILABLE');
       return;
     }
 
@@ -354,6 +359,8 @@ const handleAttendanceAction = async () => {
     await refreshData();
   } catch (err: any) {
     toast.error(err.message || 'Failed to verify location.', 'ATTENDANCE ERROR');
+  } finally {
+    isVerifying.value = false;
   }
 };
 
@@ -393,6 +400,14 @@ const refreshData = async () => {
     accomplishmentsStore.fetchInternLogs(authStore.user.id),
   ]);
 
+  // I-update ang kasalukuyang nakabukas na modal log kung nagbago ang status o feedback
+  if (selectedLogForDetail.value) {
+    const updated = (accomplishmentsStore.logs || []).find((l: any) => l.id === selectedLogForDetail.value.id);
+    if (updated) {
+      selectedLogForDetail.value = updated;
+    }
+  }
+
   if (activeMainTab.value === 'home') {
     setTimeout(renderInternGeofenceMap, 200);
   }
@@ -414,13 +429,34 @@ onMounted(async () => {
     if (authStore.user?.id) {
       realtimeChannel = supabase
         .channel(`intern-live-${authStore.user.id}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance_logs', filter: `intern_id=eq.${authStore.user.id}` }, () => refreshData())
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'accomplishment_reports', filter: `intern_id=eq.${authStore.user.id}` }, () => refreshData())
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'intern_supervisor_links', filter: `intern_id=eq.${authStore.user.id}` }, () => fetchAffiliation())
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'company_sites' }, async () => {
-          await fetchAffiliation();
-          renderInternGeofenceMap();
-        })
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'attendance_logs', filter: `intern_id=eq.${authStore.user.id}` },
+          () => refreshData()
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'accomplishment_reports', filter: `intern_id=eq.${authStore.user.id}` },
+          (payload: any) => {
+            refreshData();
+            if (payload.new && payload.new.feedback) {
+              toast.info(`Supervisor remarked: "${payload.new.feedback}"`, 'FEEDBACK RECEIVED');
+            }
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'intern_supervisor_links', filter: `intern_id=eq.${authStore.user.id}` },
+          () => fetchAffiliation()
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'company_sites' },
+          async () => {
+            await fetchAffiliation();
+            renderInternGeofenceMap();
+          }
+        )
         .subscribe();
     }
   } finally {
@@ -447,46 +483,46 @@ onUnmounted(() => {
     <TraiNextSpinner v-if="isInitialLoading" label="Signing In..." />
     <TraiNextSpinner v-if="isSigningOut" label="Signing Out..." />
 
-    <div v-show="!isInitialLoading && !isSigningOut" class="trainext-container-layout">
-      <!-- HEADER BAR (ALWAYS IN-LINE ON MOBILE) -->
-      <header class="trainext-glass-card trainext-header-bar flex items-center justify-between gap-2 px-3.5 sm:px-5 py-3">
-        <div class="trainext-brand-group flex items-center gap-2.5 min-w-0">
-          <img src="/assets/trainext-logo.png" alt="TraiNext" class="w-8 h-8 sm:w-9 sm:h-9 object-contain shrink-0" />
-          <div class="min-w-0">
-            <span class="trainext-badge-role text-[9px] sm:text-[10px] tracking-wider block">Trainee Station</span>
-            <h1 class="trainext-heading-name text-xs sm:text-sm font-bold text-white truncate max-w-[150px] sm:max-w-none">
-              {{ authStore.user?.full_name || 'Intern Trainee' }}
-            </h1>
-          </div>
+    <!-- STICKY HEADER BAR (DATING ALIGNMENT AT SPACING, ZERO CORNER ROUNDING PARA FLAT SA SCROLL) -->
+    <header class="trainext-glass-card sticky-intern-header flex items-center justify-between gap-2 px-3.5 sm:px-5 py-3">
+      <div class="trainext-brand-group flex items-center gap-2.5 min-w-0">
+        <img src="/assets/trainext-logo.png" alt="TraiNext" class="w-8 h-8 sm:w-9 sm:h-9 object-contain shrink-0" />
+        <div class="min-w-0">
+          <span class="trainext-badge-role text-[9px] sm:text-[10px] tracking-wider block">Trainee Station</span>
+          <h1 class="trainext-heading-name text-xs sm:text-sm font-bold text-white truncate max-w-[150px] sm:max-w-none">
+            {{ authStore.user?.full_name || 'Intern Trainee' }}
+          </h1>
         </div>
+      </div>
 
-        <div class="flex items-center gap-2 shrink-0">
-          <button 
-            type="button" 
-            @click="isProfileSettingsOpen = true"
-            class="header-action-btn flex items-center justify-center cursor-pointer transition-all"
-            title="Account Settings"
-            aria-label="Account Settings"
-          >
-            <svg class="w-4 h-4 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </button>
+      <div class="flex items-center gap-2 shrink-0">
+        <button 
+          type="button" 
+          @click="isProfileSettingsOpen = true"
+          class="header-action-btn flex items-center justify-center cursor-pointer transition-all"
+          title="Account Settings"
+          aria-label="Account Settings"
+        >
+          <svg class="w-4 h-4 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
 
-          <button 
-            type="button" 
-            @click="showSignOutConfirm = true"
-            class="header-action-btn flex items-center justify-center gap-1.5 text-xs font-semibold text-rose-300 hover:text-rose-200 border-rose-500/30 hover:border-rose-500/50 hover:bg-rose-500/10 cursor-pointer transition-all px-3"
-            title="Sign Out"
-          >
-            <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-            </svg>
-          </button>
-        </div>
-      </header>
+        <button 
+          type="button" 
+          @click="showSignOutConfirm = true"
+          class="header-action-btn flex items-center justify-center gap-1.5 text-xs font-semibold text-rose-300 hover:text-rose-200 border-rose-500/30 hover:border-rose-500/50 hover:bg-rose-500/10 cursor-pointer transition-all px-3"
+          title="Sign Out"
+        >
+          <svg class="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+        </button>
+      </div>
+    </header>
 
+    <div v-show="!isInitialLoading && !isSigningOut" class="trainext-container-layout pt-3">
       <!-- AFFILIATION BANNER -->
       <section v-if="internLinkStatus !== 'approved'" class="trainext-glass-card flex flex-col gap-3">
         <div class="flex items-center gap-3">
@@ -512,7 +548,7 @@ onUnmounted(() => {
               type="button" 
               @click="requestAffiliation"
               :disabled="!selectedSupervisorId || linkingLoading"
-              class="shift-action-btn px-5 h-10 text-xs shrink-0 cursor-pointer"
+              class="new-report-pill-btn h-10 px-5 text-xs shrink-0 cursor-pointer"
             >
               {{ linkingLoading ? 'SENDING...' : 'CONNECT' }}
             </button>
@@ -526,9 +562,9 @@ onUnmounted(() => {
         <section class="trainext-glass-card p-4 sm:p-5 flex flex-col gap-2.5">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div>
-            <span class="text-xs sm:text-[12px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
-              CUMULATIVE PROGRESS
-            </span>
+              <span class="text-xs sm:text-[12px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
+                CUMULATIVE PROGRESS
+              </span>
               <div class="flex items-baseline gap-2 mt-0.5">
                 <span class="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">{{ renderedHours.toFixed(1) }}</span>
                 <span class="text-xs font-semibold text-slate-400">/ {{ requiredHours }} hrs target</span>
@@ -551,9 +587,11 @@ onUnmounted(() => {
         <!-- OFFICE PERIMETER & SHIFT STATUS ROW -->
         <section class="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
           <!-- OFFICE PERIMETER -->
-          <div class="trainext-glass-card flex flex-col justify-between gap-0.5 p-4 sm:p-5">
+          <div class="trainext-glass-card flex flex-col justify-between gap-1 p-4 sm:p-5">
             <div class="flex items-center justify-between">
-            <span class="text-xs sm:text-[12px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">OFFICE PERIMETER & SUPERVISOR</span>
+              <span class="text-xs sm:text-[12px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
+                OFFICE PERIMETER &amp; SUPERVISOR
+              </span>
               <span v-if="supervisorSite" class="text-[10px] font-semibold text-[#00d9ff] font-mono">
                 Radius: {{ supervisorSite.radius_meters }}m
               </span>
@@ -580,10 +618,12 @@ onUnmounted(() => {
           </div>
 
           <!-- CURRENT SHIFT STATUS & ACTION PANEL -->
-          <div class="trainext-glass-card flex flex-col justify-between gap-2.5 p-4 sm:p-5">
+          <div class="trainext-glass-card flex flex-col justify-between gap-3 p-4 sm:p-5">
             <div>
-            <span class="text-xs sm:text-[12px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">CURRENT SHIFT STATUS</span>
-              <div class="mt-2 flex flex-wrap items-center gap-0.5">
+              <span class="text-xs sm:text-[12px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
+                CURRENT SHIFT STATUS
+              </span>
+              <div class="mt-2 flex flex-wrap items-center gap-1.5">
                 <span 
                   class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider"
                   :class="{
@@ -626,22 +666,43 @@ onUnmounted(() => {
             </div>
 
             <!-- ATTENDANCE BUTTON ACTIONS -->
-            <div class="pt-2">
+            <div class="pt-2 flex items-center justify-center w-full">
+              <!-- CLOCK IN (CYAN) -->
               <button 
                 type="button"
-                v-if="currentStatus !== 'in_transit' && currentStatus !== 'safe_at_base'"
+                v-if="!currentStatus || currentStatus === 'safe_at_base'"
                 @click="handleAttendanceAction"
-                :disabled="attendanceStore.loading || internLinkStatus !== 'approved'"
-                class="shift-action-btn w-full h-[48px] cursor-pointer"
+                :disabled="isVerifying || attendanceStore.loading || internLinkStatus !== 'approved'"
+                class="attendance-pill-btn clock-in-pill-btn cursor-pointer"
               >
-                {{ attendanceStore.loading ? 'VERIFYING GPS...' : (currentStatus === 'on_duty' ? 'CLOCK OUT' : 'CLOCK IN') }}
+                <div v-if="isVerifying || attendanceStore.loading" class="spinner-ring border-[#00d9ff]"></div>
+                <svg v-else class="w-4 h-4 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+                </svg>
+                <span>{{ (isVerifying || attendanceStore.loading) ? 'VERIFYING GPS...' : 'CLOCK IN' }}</span>
               </button>
 
+              <!-- CLOCK OUT (RED/ROSE ALERT) -->
               <button 
                 type="button"
-                v-if="currentStatus === 'in_transit'"
+                v-else-if="currentStatus === 'on_duty'"
+                @click="handleAttendanceAction"
+                :disabled="isVerifying || attendanceStore.loading || internLinkStatus !== 'approved'"
+                class="attendance-pill-btn clock-out-pill-btn cursor-pointer"
+              >
+                <div v-if="isVerifying || attendanceStore.loading" class="spinner-ring border-rose-400"></div>
+                <svg v-else class="w-4 h-4 text-rose-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+                <span>{{ (isVerifying || attendanceStore.loading) ? 'VERIFYING GPS...' : 'CLOCK OUT' }}</span>
+              </button>
+
+              <!-- I AM SAFE AT BASE (EMERALD GREEN) -->
+              <button 
+                type="button"
+                v-else-if="currentStatus === 'in_transit'"
                 @click="isSafeAtBaseModalOpen = true"
-                class="safe-action-btn w-full h-[48px] cursor-pointer"
+                class="attendance-pill-btn safe-base-pill-btn cursor-pointer"
               >
                 <svg class="w-4 h-4 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
@@ -677,28 +738,28 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <!-- DATE FILTER BAR -->
-      <div class="flex items-center gap-2 pt-1 w-full">
-        <div class="relative flex-1 flex items-center min-w-0">
-          <span class="absolute left-3.5 pointer-events-none text-[10px] font-bold text-slate-400 uppercase tracking-wider font-['Aileron',sans-serif]">
-            Filter Date:
-          </span>
-          <input 
-            v-model="reportDateFilter" 
-            type="date"
-            class="filter-date-input-full w-full pl-24 pr-3 font-mono"
-          />
-        </div>
+          <!-- FULL-WIDTH DATE FILTER BAR -->
+          <div class="flex items-center gap-2 pt-1 w-full">
+            <div class="relative flex-1 flex items-center min-w-0">
+              <span class="absolute left-3.5 pointer-events-none text-[10px] font-bold text-slate-400 uppercase tracking-wider font-['Aileron',sans-serif]">
+                Filter Date:
+              </span>
+              <input 
+                v-model="reportDateFilter" 
+                type="date"
+                class="filter-date-input-full w-full pl-24 pr-3 font-mono"
+              />
+            </div>
 
-        <button 
-          v-if="reportDateFilter"
-          type="button"
-          @click="reportDateFilter = ''"
-          class="clear-date-btn shrink-0 cursor-pointer"
-        >
-          Clear
-        </button>
-      </div>
+            <button 
+              v-if="reportDateFilter"
+              type="button"
+              @click="reportDateFilter = ''"
+              class="clear-date-btn shrink-0 cursor-pointer"
+            >
+              Clear
+            </button>
+          </div>
 
           <!-- AUTHVIEW-STYLE TABS -->
           <nav class="report-tabs-nav" aria-label="Accomplishment Filter Tabs">
@@ -730,14 +791,13 @@ onUnmounted(() => {
               class="report-item-card group cursor-pointer"
             >
               <div class="min-w-0 flex-1">
-                <P class="text-s sm:text-L font-semibold text-white group-hover:text-[#00d9ff] transition-colors truncate">
+                <p class="text-xs sm:text-sm font-semibold text-white group-hover:text-[#00d9ff] transition-colors truncate">
                   {{ log.title }}
-                </P>
+                </p>
                 
                 <div class="flex items-center gap-2 text-[10.5px] text-[#858994] mt-1 font-mono">
                   <span>{{ log.report_date }}</span>
-                  <span>•</span>
-                  <span class="text-[#00d9ff]">{{ log.rendered_hours || 0 }} hrs</span>
+                  <span v-if="log.feedback" class="text-emerald-400 font-bold">• with Feedback</span>
                 </div>
               </div>
 
@@ -812,6 +872,11 @@ onUnmounted(() => {
           </div>
         </section>
       </div>
+
+      <footer class="trainext-footer-tagline pt-4 mb-2">
+        <span>Smart Tracking.</span>
+        <span>Real-Time Safety.</span>
+      </footer>
     </div>
 
     <!-- FIXED MOBILE BOTTOM NAVIGATION TABS -->
@@ -946,6 +1011,25 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* STICKY HEADER (FLAT, ZERO CORNER ROUNDING, NAKA-LOCK SA TAAS) */
+.sticky-intern-header {
+  position: sticky !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  width: 100% !important;
+  z-index: 40 !important;
+  border-radius: 0 !important;
+  border-left: 0 !important;
+  border-right: 0 !important;
+  border-top: 0 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background: rgba(5, 8, 17, 0.92) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
 /* TAB CONTAINER SMOOTH TRANSITIONS */
 .tab-pane-container {
   display: flex;
@@ -985,7 +1069,7 @@ onUnmounted(() => {
   transform: scale(0.96);
 }
 
-/* GAYA NG EDIT PILL SA ACCOMPLISHMENT DETAIL MODAL */
+/* NEW REPORT PILL BUTTON */
 .new-report-pill-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -993,7 +1077,7 @@ onUnmounted(() => {
   gap: 6px !important;
   height: 34px !important;
   padding: 0 16px !important;
-  border-radius: 9999px !important; /* Buong pill rounding */
+  border-radius: 9999px !important;
   border: 1px solid rgba(0, 217, 255, 0.45) !important;
   background: rgba(0, 217, 255, 0.1) !important;
   color: #00d9ff !important;
@@ -1025,32 +1109,108 @@ onUnmounted(() => {
   filter: grayscale(0.5) !important;
 }
 
-/* SAFE AT BASE BUTTON */
-.safe-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+/* ================= ATTENDANCE PILL CONTROLS (RAPID TOUCH, ACCURATE TARGET) ================= */
+.attendance-pill-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 8px !important;
+  height: 44px !important;
+  min-width: 170px !important;
+  padding: 0 32px !important;
   border-radius: 9999px !important;
-  border: 1px solid rgba(52, 211, 153, 0.6);
-  background: linear-gradient(180deg, rgba(5, 46, 30, 0.8) 0%, rgba(6, 78, 59, 0.9) 100%);
-  box-shadow: 0 0 20px rgba(52, 211, 153, 0.25);
-  color: #ffffff;
-  font: 700 12px/1 "Aileron", sans-serif;
-  letter-spacing: 0.5px;
-  transition: all 180ms ease;
-  user-select: none;
+  touch-action: manipulation;
+  font-family: "Aileron", -apple-system, sans-serif !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.5px !important;
+  user-select: none !important;
+  cursor: pointer !important;
+  transition: transform 120ms ease, background 160ms ease, border-color 160ms ease !important;
 }
 
-.safe-action-btn:hover {
-  background: linear-gradient(180deg, rgba(6, 78, 59, 0.9) 0%, rgba(5, 46, 30, 0.95) 100%);
-  border-color: rgba(52, 211, 153, 0.9);
-  box-shadow: 0 0 25px rgba(52, 211, 153, 0.4);
-  transform: translateY(-1px);
+/* CLOCK IN: NEON CYAN */
+.clock-in-pill-btn {
+  border: 1px solid rgba(0, 217, 255, 0.5) !important;
+  background: rgba(0, 217, 255, 0.12) !important;
+  color: #00d9ff !important;
+  box-shadow: 0 0 15px rgba(0, 217, 255, 0.2) !important;
 }
 
-.safe-action-btn:active {
-  transform: scale(0.98);
+.clock-in-pill-btn:hover:not(:disabled) {
+  background: rgba(0, 217, 255, 0.25) !important;
+  border-color: rgba(0, 217, 255, 0.85) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 20px rgba(0, 217, 255, 0.4) !important;
+  transform: translateY(-1px) !important;
+}
+
+.clock-in-pill-btn:active:not(:disabled) {
+  transform: scale(0.95) !important;
+}
+
+/* CLOCK OUT: NEON RED / ROSE ALERT */
+.clock-out-pill-btn {
+  border: 1px solid rgba(244, 63, 94, 0.55) !important;
+  background: rgba(244, 63, 94, 0.15) !important;
+  color: #fca5a5 !important;
+  box-shadow: 0 0 15px rgba(244, 63, 94, 0.2) !important;
+}
+
+.clock-out-pill-btn:hover:not(:disabled) {
+  background: rgba(244, 63, 94, 0.3) !important;
+  border-color: rgba(244, 63, 94, 0.9) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 22px rgba(244, 63, 94, 0.45) !important;
+  transform: translateY(-1px) !important;
+}
+
+.clock-out-pill-btn:active:not(:disabled) {
+  transform: scale(0.95) !important;
+}
+
+/* SAFE AT BASE: EMERALD GREEN */
+.safe-base-pill-btn {
+  border: 1px solid rgba(52, 211, 153, 0.55) !important;
+  background: rgba(5, 46, 30, 0.7) !important;
+  color: #6ee7b7 !important;
+  box-shadow: 0 0 15px rgba(52, 211, 153, 0.2) !important;
+}
+
+.safe-base-pill-btn:hover:not(:disabled) {
+  background: rgba(6, 78, 59, 0.85) !important;
+  border-color: rgba(52, 211, 153, 0.9) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 22px rgba(52, 211, 153, 0.45) !important;
+  transform: translateY(-1px) !important;
+}
+
+.safe-base-pill-btn:active:not(:disabled) {
+  transform: scale(0.95) !important;
+}
+
+.attendance-pill-btn:disabled {
+  opacity: 0.55 !important;
+  cursor: not-allowed !important;
+  filter: grayscale(0.4) !important;
+  transform: none !important;
+}
+
+/* INLINE SPINNER RING */
+.spinner-ring {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border-width: 2px;
+  border-style: solid;
+  border-top-color: transparent !important;
+  animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* MODAL SIGN OUT BUTTON */
@@ -1079,40 +1239,6 @@ onUnmounted(() => {
 
 .modal-signout-btn:active:not(:disabled) {
   transform: scale(0.97);
-}
-
-/* DATE FILTER BAR STYLES */
-.field-mini-label {
-  font-family: "Aileron", -apple-system, sans-serif;
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.6px;
-  color: #858994;
-}
-
-.filter-date-input {
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 9999px;
-  background: rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #ffffff;
-  font-family: monospace;
-  font-size: 11px;
-  outline: none;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
-  color-scheme: dark;
-}
-
-.filter-date-input:focus {
-  border-color: #00d9ff;
-  box-shadow: 0 0 8px rgba(0, 217, 255, 0.25);
-}
-
-.filter-date-input::-webkit-calendar-picker-indicator {
-  cursor: pointer;
-  filter: invert(0.8) sepia(100%) saturate(300%) hue-rotate(150deg);
-  opacity: 0.75;
 }
 
 /* FULL-WIDTH FILTER INPUT */
@@ -1292,14 +1418,6 @@ onUnmounted(() => {
   transition: all 180ms ease;
 }
 
-.nav-label {
-  font-family: "Aileron", sans-serif;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  transition: all 180ms ease;
-}
-
 .bottom-nav-item:hover {
   color: #e2e8f0;
 }
@@ -1315,11 +1433,6 @@ onUnmounted(() => {
 .bottom-nav-item.active svg {
   color: #00d9ff;
   transform: translateY(-1px);
-}
-
-.bottom-nav-item.active .nav-label {
-  color: #ffffff;
-  font-weight: 700;
 }
 
 .active-dot {
