@@ -1,9 +1,12 @@
-import type { CapacitorConfig } from '@capacitor/cli';
+  import type { CapacitorConfig } from '@capacitor/cli';
 
-const config: CapacitorConfig = {
-  appId: 'com.trainext.app',
-  appName: 'TraiNext',
-  webDir: 'dist'
-};
+  const config: CapacitorConfig = {
+    appId: 'com.trainext.app',
+    appName: 'TraiNext',
+    webDir: 'dist',
+    server: {
+      androidScheme: 'https'
+    }
+  };
 
-export default config;
+  export default config;

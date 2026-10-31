@@ -6,7 +6,7 @@ export interface UserProfileData {
   id: string;
   email?: string;
   full_name: string;
-  role: UserRole;
+  role: UserRole | null;
   contact_number?: string;
   home_address?: string;
   emergency_contact_name?: string;
@@ -46,9 +46,9 @@ export const useAuthStore = defineStore('auth', {
       this.loading = true;
 
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-          await this.fetchProfile(session.user.id);
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await this.fetchProfile(user.id);
         } else {
           this.user = null;
         }
@@ -64,10 +64,12 @@ export const useAuthStore = defineStore('auth', {
     async fetchProfile(userId?: string) {
       try {
         let targetId = userId;
+        let authUser: any = null;
 
         if (!targetId) {
-          const { data: { session } } = await supabase.auth.getSession();
-          targetId = session?.user?.id;
+          const { data } = await supabase.auth.getUser();
+          authUser = data.user;
+          targetId = authUser?.id;
         }
 
         if (!targetId) {
@@ -75,6 +77,7 @@ export const useAuthStore = defineStore('auth', {
           return null;
         }
 
+        // Kunin ang profile mula sa public.profiles table
         const { data, error } = await supabase
           .from('profiles')
           .select('*')
@@ -82,7 +85,30 @@ export const useAuthStore = defineStore('auth', {
           .maybeSingle();
 
         if (error) throw error;
-        this.user = data as any;
+
+        if (data) {
+          this.user = data as UserProfileData;
+        } else {
+          // Fallback para sa mga bagong Google OAuth users na wala pang row sa profiles table
+          if (!authUser) {
+            const { data: userRes } = await supabase.auth.getUser();
+            authUser = userRes.user;
+          }
+
+          if (authUser) {
+            const meta = authUser.user_metadata || {};
+            this.user = {
+              id: authUser.id,
+              email: authUser.email,
+              full_name: meta.full_name || meta.name || authUser.email?.split('@')[0] || 'User',
+              role: (meta.role as UserRole) || null,
+              avatar_url: meta.avatar_url || meta.picture || undefined,
+            };
+          } else {
+            this.user = null;
+          }
+        }
+
         return this.user;
       } catch (err: any) {
         this.error = err.message || 'Failed to fetch user profile.';
@@ -117,8 +143,6 @@ export const useAuthStore = defineStore('auth', {
       this.loading = true;
       this.error = null;
       try {
-        // Ang trigger sa database (handle_new_user) ang awtomatikong gagawa
-        // ng profile row gamit ang metadata, nang hindi lumalabag sa RLS policy.
         const { data, error } = await supabase.auth.signUp({
           email: email.trim(),
           password: pass,
@@ -132,7 +156,6 @@ export const useAuthStore = defineStore('auth', {
 
         if (error) throw error;
 
-        // Kung naka-disable ang email confirmation at may instant session:
         if (data.session && data.user) {
           await this.fetchProfile(data.user.id);
           this.isInitialized = true;
@@ -171,11 +194,11 @@ export const useAuthStore = defineStore('auth', {
     },
 
     async assignGoogleRole(role: UserRole) {
-      const { data: { session } } = await supabase.auth.getSession();
-      const user = session?.user;
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('No authenticated user session found.');
 
-      const fullName = user.user_metadata?.full_name || user.email?.split('@')[0] || 'User';
+      const fullName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || 'User';
+      const avatarUrl = user.user_metadata?.avatar_url || user.user_metadata?.picture || null;
 
       const { error } = await supabase
         .from('profiles')
@@ -184,6 +207,8 @@ export const useAuthStore = defineStore('auth', {
           full_name: fullName,
           role: role,
           email: user.email,
+          avatar_url: avatarUrl,
+          updated_at: new Date().toISOString(),
         });
 
       if (error) throw error;
@@ -192,6 +217,7 @@ export const useAuthStore = defineStore('auth', {
 
     async signOut() {
       this.loading = true;
+      this.error = null;
       try {
         await supabase.auth.signOut();
       } catch (err: any) {

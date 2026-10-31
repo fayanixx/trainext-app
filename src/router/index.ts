@@ -60,22 +60,29 @@ const router = createRouter({
 function destinationFor(role?: string | null): string {
   if (role === 'supervisor') return '/supervisor'
   if (role === 'coordinator') return '/coordinator'
-  return '/intern'
+  if (role === 'intern') return '/intern'
+  return '/auth'
 }
 
 router.beforeEach(async (to) => {
-  // 1. Kung recovery link ang binuksan mula sa email, huwag harangin o i-redirect sa dashboard
+  // 1. Password recovery verification
   const isRecoveryHash = window.location.hash.includes('type=recovery') || to.query.type === 'recovery'
-  if (to.name === 'ResetPassword' || isRecoveryHash) {
-    if (to.name !== 'ResetPassword') {
-      return { name: 'ResetPassword', hash: window.location.hash }
+  if (isRecoveryHash) {
+    if (to.name !== 'ResetPassword' && to.name !== 'Auth') {
+      return { name: 'Auth', hash: window.location.hash }
     }
+    return true
+  }
+
+  // 2. Pahintulutan ang /auth na mag-handle ng OAuth hash tokens nang hindi ginagambala
+  const hasAuthToken = window.location.hash.includes('access_token=')
+  if (to.name === 'Auth' && hasAuthToken) {
     return true
   }
 
   const auth = useAuthStore()
 
-  // 2. Tiyaking initialized ang session bago mag-decide ang guard
+  // 3. Siguraduhing may session state bago ipagpatuloy ang evaluation
   if (!auth.isInitialized) {
     try {
       await auth.initialize()
@@ -86,17 +93,21 @@ router.beforeEach(async (to) => {
 
   const isPublic = to.meta.public === true
 
-  // 3. Kung naka-login na at pumunta sa /auth o /login, idiretso sa dashboard
+  // 4. Kung authenticated na at may valid role, ilayo sa /auth
   if (to.name === 'Auth' && auth.isAuthenticated && auth.user) {
-    return destinationFor(auth.user.role)
+    if (auth.user.role) {
+      return destinationFor(auth.user.role)
+    }
+    // Kung walang role (bagong Google user), manatili sa /auth para sa modal
+    return true
   }
 
-  // 4. Papasukin kapag public route (e.g. login, reset-password request)
+  // 5. Public routes access
   if (isPublic) {
     return true
   }
 
-  // 5. Kung kailangan ng login pero walang session, balik sa /auth
+  // 6. Proteksyon sa authenticated routes
   if (!auth.isAuthenticated || !auth.user) {
     return {
       name: 'Auth',
@@ -104,7 +115,12 @@ router.beforeEach(async (to) => {
     }
   }
 
-  // 6. Role-based check
+  // 7. Kung walang assigned role pa ang authenticated user, ibalik sa /auth para pumili
+  if (!auth.user.role) {
+    return { name: 'Auth' }
+  }
+
+  // 8. Role-based enforcement
   const requiredRole = to.meta.role as string | undefined
   if (requiredRole && auth.user.role !== requiredRole) {
     return destinationFor(auth.user.role)
