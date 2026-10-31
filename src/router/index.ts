@@ -1,5 +1,8 @@
 import { createRouter, createWebHistory } from '@ionic/vue-router'
 import type { RouteRecordRaw } from 'vue-router'
+import { App as CapApp } from '@capacitor/app'
+import { Capacitor } from '@capacitor/core'
+import { supabase } from '@/lib/supabase'
 import AuthView from '@/views/AuthView.vue'
 import InternDashboard from '@/views/InternDashboard.vue'
 import SupervisorDashboard from '@/views/SupervisorDashboard.vue'
@@ -64,6 +67,52 @@ function destinationFor(role?: string | null): string {
   return '/auth'
 }
 
+// -------------------------------------------------------------
+// MOBILE DEEP LINK HANDLER (Capacitor Android Native Callback)
+// -------------------------------------------------------------
+if (Capacitor.isNativePlatform()) {
+  CapApp.addListener('appUrlOpen', async (event) => {
+    const rawUrl = event.url
+
+    // Saluhin ang callback mula sa Supabase OAuth custom scheme
+    if (rawUrl.includes('com.trainext.app') || rawUrl.includes('access_token=') || rawUrl.includes('refresh_token=')) {
+      try {
+        const hashIndex = rawUrl.indexOf('#')
+        const hash = hashIndex !== -1 ? rawUrl.substring(hashIndex + 1) : ''
+        const params = new URLSearchParams(hash)
+
+        const accessToken = params.get('access_token')
+        const refreshToken = params.get('refresh_token')
+
+        if (accessToken && refreshToken) {
+          const { data, error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          })
+
+          if (error) throw error
+
+          if (data.session?.user) {
+            const authStore = useAuthStore()
+            await authStore.fetchProfile(data.session.user.id)
+
+            if (authStore.user?.role) {
+              router.replace(destinationFor(authStore.user.role))
+            } else {
+              router.replace('/auth')
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to parse mobile deep link tokens:', err)
+      }
+    }
+  })
+}
+
+// -------------------------------------------------------------
+// NAVIGATION GUARDS
+// -------------------------------------------------------------
 router.beforeEach(async (to) => {
   // 1. Password recovery verification
   const isRecoveryHash = window.location.hash.includes('type=recovery') || to.query.type === 'recovery'
@@ -74,7 +123,7 @@ router.beforeEach(async (to) => {
     return true
   }
 
-  // 2. Pahintulutan ang /auth na mag-handle ng OAuth hash tokens nang hindi ginagambala
+  // 2. Pahintulutan ang /auth na mag-handle ng OAuth hash tokens sa web view
   const hasAuthToken = window.location.hash.includes('access_token=')
   if (to.name === 'Auth' && hasAuthToken) {
     return true
@@ -98,7 +147,7 @@ router.beforeEach(async (to) => {
     if (auth.user.role) {
       return destinationFor(auth.user.role)
     }
-    // Kung walang role (bagong Google user), manatili sa /auth para sa modal
+    // Kung walang role (bagong Google user), manatili sa /auth para sa onboarding modal
     return true
   }
 

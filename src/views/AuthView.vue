@@ -388,7 +388,6 @@ const confirmGoogleRole = async () => {
             <button type="submit" class="primary-button login-button" :disabled="loading || authStore.loading">
               {{ (loading || authStore.loading) ? 'WAIT...' : 'LOGIN' }}
             </button>
-
             <!-- Divider -->
             <div class="or-divider" aria-label="or">
               <span></span><small>OR</small><span></span>
