@@ -60,6 +60,9 @@ const availableSupervisors = ref<any[]>([]);
 const linkingLoading = ref(false);
 const isInitialLoading = ref(true);
 
+// State para sa pag-track kung nabisita na ang Reports tab (notif dismiss logic)
+const hasViewedReportsTab = ref(false);
+
 // Instant Click Visual Feedback State para sa Clock In/Out
 const isVerifying = ref(false);
 
@@ -110,6 +113,31 @@ const currentStatusText = computed(() => {
   if (currentStatus.value === 'in_transit') return 'In Transit';
   if (currentStatus.value === 'safe_at_base') return 'Safe at Base';
   return 'Not Clocked In';
+});
+
+// Raw count ng mga may feedback
+const rawFeedbackCount = computed(() => {
+  return (accomplishmentsStore.logs || []).filter((l: any) => l.feedback && l.status !== 'pending').length;
+});
+
+// Notification Badge Counter: kapag nabisita na ang reports tab, nagiging 0 ito
+const unreadFeedbackCount = computed(() => {
+  if (hasViewedReportsTab.value) return 0;
+  return rawFeedbackCount.value;
+});
+
+// Watcher kapag lumipat sa reports tab
+watch(activeMainTab, (newTab) => {
+  if (newTab === 'reports') {
+    hasViewedReportsTab.value = true;
+  }
+});
+
+// Watcher: kung may dumating na bagong feedback habang wala sa reports tab, ibalik ang badge
+watch(rawFeedbackCount, (newVal, oldVal) => {
+  if (newVal > oldVal && activeMainTab.value !== 'reports') {
+    hasViewedReportsTab.value = false;
+  }
 });
 
 // Filtered Accomplishments (Tab + Date Filter)
@@ -400,7 +428,6 @@ const refreshData = async () => {
     accomplishmentsStore.fetchInternLogs(authStore.user.id),
   ]);
 
-  // I-update ang kasalukuyang nakabukas na modal log kung nagbago ang status o feedback
   if (selectedLogForDetail.value) {
     const updated = (accomplishmentsStore.logs || []).find((l: any) => l.id === selectedLogForDetail.value.id);
     if (updated) {
@@ -480,10 +507,10 @@ onUnmounted(() => {
     <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
     <!-- FULLSCREEN BRANDED SPINNERS -->
-    <TraiNextSpinner v-if="isInitialLoading" label="Signing In..." />
+    <TraiNextSpinner v-if="isInitialLoading" label="Loading..." />
     <TraiNextSpinner v-if="isSigningOut" label="Signing Out..." />
 
-    <!-- STICKY HEADER BAR (DATING ALIGNMENT AT SPACING, ZERO CORNER ROUNDING PARA FLAT SA SCROLL) -->
+    <!-- STICKY HEADER BAR (FLAT, ZERO CORNER ROUNDING PARA FLAT SA SCROLL) -->
     <header class="trainext-glass-card sticky-intern-header flex items-center justify-between gap-2 px-3.5 sm:px-5 py-3">
       <div class="trainext-brand-group flex items-center gap-2.5 min-w-0">
         <img src="/assets/trainext-logo.png" alt="TraiNext" class="w-8 h-8 sm:w-9 sm:h-9 object-contain shrink-0" />
@@ -879,42 +906,57 @@ onUnmounted(() => {
       </footer>
     </div>
 
-    <!-- FIXED MOBILE BOTTOM NAVIGATION TABS -->
+    <!-- ================= FIXED BOTTOM NAV (ICON-ONLY + AUTO-DISMISS NOTIF BADGE) ================= -->
     <nav class="fixed-bottom-bar" aria-label="Bottom Navigation">
       <div class="bottom-bar-inner">
+        <!-- TAB 1: HOME -->
         <button 
           type="button" 
           @click="activeMainTab = 'home'"
           class="bottom-nav-item"
           :class="{ active: activeMainTab === 'home' }"
+          aria-label="Home Station"
         >
-          <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-          </svg>
+          <div class="relative flex items-center justify-center">
+            <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+            </svg>
+          </div>
           <span v-if="activeMainTab === 'home'" class="active-dot"></span>
         </button>
 
+        <!-- TAB 2: REPORTS (MAWAWALA ANG BADGE KAPAG NABISITA O PININDOT NA) -->
         <button 
           type="button" 
-          @click="activeMainTab = 'reports'"
+          @click="activeMainTab = 'reports'; hasViewedReportsTab = true;"
           class="bottom-nav-item"
           :class="{ active: activeMainTab === 'reports' }"
+          aria-label="Accomplishment Reports"
         >
-          <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-          </svg>
+          <div class="relative flex items-center justify-center">
+            <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span v-if="unreadFeedbackCount > 0" class="nav-badge-count">
+              {{ unreadFeedbackCount > 99 ? '99+' : unreadFeedbackCount }}
+            </span>
+          </div>
           <span v-if="activeMainTab === 'reports'" class="active-dot"></span>
         </button>
 
+        <!-- TAB 3: ATTENDANCE -->
         <button 
           type="button" 
           @click="activeMainTab = 'attendance'"
           class="bottom-nav-item"
           :class="{ active: activeMainTab === 'attendance' }"
+          aria-label="Attendance Records"
         >
-          <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
+          <div class="relative flex items-center justify-center">
+            <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
           <span v-if="activeMainTab === 'attendance'" class="active-dot"></span>
         </button>
       </div>
@@ -1369,7 +1411,7 @@ onUnmounted(() => {
 .report-tabs-nav .tab-divider:nth-of-type(2) { left: 50%; }
 .report-tabs-nav .tab-divider:nth-of-type(3) { left: 75%; }
 
-/* FIXED CYBER-GLASS BOTTOM NAVIGATION */
+/* FIXED CYBER-GLASS BOTTOM NAVIGATION (ICON-ONLY) */
 .fixed-bottom-bar {
   position: fixed;
   bottom: 0;
@@ -1382,9 +1424,9 @@ onUnmounted(() => {
 
 .bottom-bar-inner {
   pointer-events: auto;
-  max-width: 440px;
+  max-width: 320px;
   margin: 0 auto;
-  height: 58px;
+  height: 54px;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: center;
@@ -1400,10 +1442,8 @@ onUnmounted(() => {
 .bottom-nav-item {
   position: relative;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
   height: 100%;
   border: 0;
   background: transparent;
@@ -1418,26 +1458,43 @@ onUnmounted(() => {
   transition: all 180ms ease;
 }
 
-.bottom-nav-item:hover {
-  color: #e2e8f0;
-}
-
 .bottom-nav-item:hover svg {
   color: #e2e8f0;
 }
 
-.bottom-nav-item.active {
-  color: #00d9ff;
-}
-
 .bottom-nav-item.active svg {
   color: #00d9ff;
-  transform: translateY(-1px);
+  transform: translateY(-2px);
 }
 
+/* NOTIFICATION BADGE NA MAY BILANG */
+.nav-badge-count {
+  position: absolute;
+  top: -6px;
+  right: -9px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: #00d9ff;
+  color: #050811;
+  font-family: "Aileron", -apple-system, sans-serif;
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 10px rgba(0, 217, 255, 0.7);
+  border: 1.5px solid #070b12;
+  user-select: none;
+  pointer-events: none;
+}
+
+/* ACTIVE TAB INDICATOR SA ILALIM */
 .active-dot {
   position: absolute;
-  bottom: 5px;
+  bottom: 6px;
   width: 4px;
   height: 4px;
   border-radius: 50%;

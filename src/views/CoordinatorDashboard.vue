@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/auth';
@@ -28,12 +28,17 @@ const showSignOutConfirm = ref(false);
 const isSigningOut = ref(false);
 const isInitialLoading = ref(true);
 
+// State para sa pag-track kung nabisita na ang tabs (notif auto-dismiss)
+const hasViewedDirectoryTab = ref(false);
+const hasViewedPerformanceTab = ref(false);
+
 // Search & Filter State para sa Directory
 const directorySearch = ref('');
 const directoryStatusFilter = ref<'all' | 'on_duty' | 'in_transit' | 'safe_at_base' | 'idle' | 'completed_ojt'>('all');
 
-// Search & Filter State para sa Performance Tab
+// Search & Filter State para sa Performance / Accomplishments Tab
 const performanceSearch = ref('');
+const reportStatusFilter = ref<'all' | 'approved' | 'rejected'>('all');
 
 // Document Preview State (DTR Audit)
 const isReportPreviewOpen = ref(false);
@@ -41,7 +46,7 @@ const previewHtml = ref('');
 const previewDocTitle = ref('');
 const isExportingIndividual = ref<string | null>(null);
 
-// Trainee Specific Approved Reports Modal State
+// Trainee Specific Reports Modal State
 const isTraineeReportsModalOpen = ref(false);
 const selectedTraineeForReview = ref<InternRecord | null>(null);
 
@@ -60,21 +65,23 @@ interface InternRecord {
   safe_at_base_time?: string;
   transit_notes?: string;
   is_ojt_completed: boolean;
+  reviewed_reports_count: number;
   approved_reports_count: number;
+  rejected_reports_count: number;
 }
 
-interface ApprovedReportItem {
+interface AccomplishmentReportItem {
   id: string;
   intern_id: string;
   title: string;
   description: string;
   report_date: string;
   feedback?: string;
-  status: string;
+  status: 'approved' | 'rejected' | 'pending';
 }
 
 const internsList = ref<InternRecord[]>([]);
-const allApprovedReports = ref<ApprovedReportItem[]>([]);
+const allReviewedReports = ref<AccomplishmentReportItem[]>([]);
 
 // Metrics Calculation
 const totalInterns = computed(() => internsList.value.length);
@@ -86,6 +93,39 @@ const completedOjtCount = computed(() => internsList.value.filter((i) => i.is_oj
 // Safety Lists para sa Home / Overview Tab
 const inTransitInterns = computed(() => internsList.value.filter((i) => i.today_status === 'in_transit'));
 const safeAtBaseInterns = computed(() => internsList.value.filter((i) => i.today_status === 'safe_at_base'));
+
+// Dismissible Notification Badges Logic
+const activeInTransitBadgeCount = computed(() => {
+  if (hasViewedDirectoryTab.value) return 0;
+  return inTransitCount.value;
+});
+
+const activeReportsBadgeCount = computed(() => {
+  if (hasViewedPerformanceTab.value) return 0;
+  return allReviewedReports.value.length;
+});
+
+watch(activeMainTab, (newTab) => {
+  if (newTab === 'directory') {
+    hasViewedDirectoryTab.value = true;
+  } else if (newTab === 'performance') {
+    hasViewedPerformanceTab.value = true;
+  }
+});
+
+// Kapag may bagong pumasok na trainee na nag-transit habang wala sa directory, ibalik ang badge
+watch(inTransitCount, (newVal, oldVal) => {
+  if (newVal > oldVal && activeMainTab.value !== 'directory') {
+    hasViewedDirectoryTab.value = false;
+  }
+});
+
+// Kapag may bagong na-review na reports habang wala sa performance tab, ibalik ang badge
+watch(() => allReviewedReports.value.length, (newVal, oldVal) => {
+  if (newVal > oldVal && activeMainTab.value !== 'performance') {
+    hasViewedPerformanceTab.value = false;
+  }
+});
 
 // Cohort Cumulative Target Calculation
 const cohortTargetHours = computed(() => totalInterns.value * 486);
@@ -120,7 +160,7 @@ const filteredDirectoryInterns = computed(() => {
   });
 });
 
-// Filtered Trainees sa Performance / Approved Reports Tab
+// Filtered Trainees sa Performance / Accomplishments Tab
 const filteredPerformanceInterns = computed(() => {
   const query = performanceSearch.value.toLowerCase().trim();
   if (!query) return internsList.value;
@@ -131,10 +171,14 @@ const filteredPerformanceInterns = computed(() => {
   );
 });
 
-// Mga Aprubadong Reports ng Kasalukuyang Piniling Trainee
-const currentTraineeApprovedReports = computed(() => {
+// Mga Reports ng Kasalukuyang Piniling Trainee (Approved + Rejected)
+const currentTraineeReports = computed(() => {
   if (!selectedTraineeForReview.value) return [];
-  return allApprovedReports.value.filter((r) => r.intern_id === selectedTraineeForReview.value!.id);
+  let reports = allReviewedReports.value.filter((r) => r.intern_id === selectedTraineeForReview.value!.id);
+  if (reportStatusFilter.value !== 'all') {
+    reports = reports.filter((r) => r.status === reportStatusFilter.value);
+  }
+  return reports;
 });
 
 // Fetch Master Coordinator Data
@@ -152,13 +196,13 @@ const fetchMasterData = async () => {
 
     if (!interns || interns.length === 0) {
       internsList.value = [];
-      allApprovedReports.value = [];
+      allReviewedReports.value = [];
       return;
     }
 
     const internIds = interns.map((i: any) => i.id);
 
-    // 2. Lookup Tables at Approved Accomplishments
+    // 2. Lookup Tables at Accomplishment Reports (Approved AT Rejected)
     const [linksRes, sitesRes, supervisorsRes, attendanceRes, reportsRes] = await Promise.all([
       supabase
         .from('intern_supervisor_links')
@@ -179,7 +223,7 @@ const fetchMasterData = async () => {
         .from('accomplishment_reports')
         .select('id, intern_id, title, description, report_date, feedback, status')
         .in('intern_id', internIds)
-        .eq('status', 'approved')
+        .in('status', ['approved', 'rejected'])
         .order('report_date', { ascending: false }),
     ]);
 
@@ -187,7 +231,7 @@ const fetchMasterData = async () => {
     const sites = sitesRes.data || [];
     const supervisors = supervisorsRes.data || [];
     const attendance = attendanceRes.data || [];
-    allApprovedReports.value = (reportsRes.data as ApprovedReportItem[]) || [];
+    allReviewedReports.value = (reportsRes.data as AccomplishmentReportItem[]) || [];
 
     const supervisorMap = new Map(supervisors.map((s: any) => [s.id, s.full_name]));
     const siteMap = new Map(sites.map((s: any) => [s.supervisor_id, s.company_name]));
@@ -222,7 +266,9 @@ const fetchMasterData = async () => {
       );
 
       const isCompleted = totalHours >= 486;
-      const approvedCount = allApprovedReports.value.filter((r) => r.intern_id === intern.id).length;
+      const traineeReports = allReviewedReports.value.filter((r) => r.intern_id === intern.id);
+      const approvedCount = traineeReports.filter((r) => r.status === 'approved').length;
+      const rejectedCount = traineeReports.filter((r) => r.status === 'rejected').length;
 
       return {
         id: intern.id,
@@ -238,7 +284,9 @@ const fetchMasterData = async () => {
         safe_at_base_time: todayLog?.safe_at_base_time,
         transit_notes: todayLog?.transit_notes,
         is_ojt_completed: isCompleted,
+        reviewed_reports_count: traineeReports.length,
         approved_reports_count: approvedCount,
+        rejected_reports_count: rejectedCount,
       };
     });
   } catch (err: any) {
@@ -262,9 +310,10 @@ const handleSignOut = async () => {
   }
 };
 
-// Open Trainee Approved Reports Drawer
+// Open Trainee Reports Drawer
 const openTraineeReports = (intern: InternRecord) => {
   selectedTraineeForReview.value = intern;
+  reportStatusFilter.value = 'all';
   isTraineeReportsModalOpen.value = true;
 };
 
@@ -286,6 +335,7 @@ const handleMasterCSVExport = () => {
     'OJT Status': i.is_ojt_completed ? 'COMPLETED (486h)' : 'IN PROGRESS',
     'Today Shift Status': i.today_status.replace(/_/g, ' ').toUpperCase(),
     'Approved Reports': i.approved_reports_count,
+    'Rejected Reports': i.rejected_reports_count,
   }));
 
   exportToCsv('trainext_cohort_master_summary', exportData);
@@ -384,10 +434,10 @@ onUnmounted(() => {
     <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
     <!-- FULLSCREEN BRANDED SPINNERS -->
-    <TraiNextSpinner v-if="isInitialLoading" label="Signing In..." />
+    <TraiNextSpinner v-if="isInitialLoading" label="Loading..." />
     <TraiNextSpinner v-if="isSigningOut" label="Signing Out..." />
 
-    <!-- STICKY HEADER (FLAT EDGE-TO-EDGE, WALANG CORNER ROUNDING PARA LALAPAT SA SCROLL) -->
+    <!-- STICKY HEADER -->
     <header class="trainext-glass-card sticky-coordinator-header flex items-center justify-between gap-2 px-3.5 sm:px-5 py-3">
       <div class="trainext-brand-group flex items-center gap-2.5 min-w-0">
         <img src="/assets/trainext-logo.png" alt="TraiNext" class="w-8 h-8 sm:w-9 sm:h-9 object-contain shrink-0" />
@@ -428,7 +478,7 @@ onUnmounted(() => {
 
     <div v-show="!isInitialLoading && !isSigningOut" class="trainext-container-layout pt-3">
       
-      <!-- ================= TAB 1: OVERVIEW (FOCUSED SA SAFETY AT BASE) ================= -->
+      <!-- ================= TAB 1: OVERVIEW ================= -->
       <div v-show="activeMainTab === 'overview'" class="tab-pane-container">
         <!-- COHORT PROGRESS PROGRESS BAR -->
         <section class="trainext-glass-card p-4 sm:p-5 flex flex-col gap-2.5">
@@ -484,7 +534,7 @@ onUnmounted(() => {
           </div>
         </section>
 
-        <!-- REAL-TIME SAFETY & TRANSIT VERIFICATION RADAR (WITH NOTES DIRECT DISPLAY) -->
+        <!-- REAL-TIME SAFETY & TRANSIT VERIFICATION RADAR -->
         <section class="trainext-glass-card flex flex-col gap-3.5 p-4 sm:p-5">
           <div class="flex items-center justify-between gap-2">
             <div>
@@ -536,7 +586,7 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- SAFE AT BASE CONFIRMED TODAY (WITH COMMENTS DISPLAYED DIRECTLY BELOW) -->
+            <!-- SAFE AT BASE CONFIRMED TODAY -->
             <div class="p-3.5 rounded-2xl bg-emerald-500/[0.04] border border-emerald-500/25 flex flex-col gap-2">
               <div class="flex items-center justify-between">
                 <span class="text-[10px] font-bold uppercase tracking-wider text-emerald-300 font-mono flex items-center gap-1.5">
@@ -588,10 +638,10 @@ onUnmounted(() => {
         </section>
       </div>
 
-      <!-- ================= TAB 2: DIRECTORY (ACADEMIC COHORT DOCU NASA PINAKATAAS) ================= -->
+      <!-- ================= TAB 2: DIRECTORY ================= -->
       <div v-show="activeMainTab === 'directory'" class="tab-pane-container">
         
-        <!-- ACADEMIC COHORT DOCUMENTATION & AUDIT EXPORTS (PINAKATAAS NG DIRECTORY) -->
+        <!-- ACADEMIC COHORT DOCUMENTATION & AUDIT EXPORTS -->
         <section class="trainext-glass-card flex flex-col gap-3.5 p-4 sm:p-5">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -706,9 +756,7 @@ onUnmounted(() => {
 
                 <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#858994] mt-1 font-mono">
                   <span class="text-slate-300 font-medium truncate max-w-[140px]">{{ intern.company_name }}</span>
-                  <span></span>
-                  <span class="truncate max-w-[140px]">Sup: {{ intern.supervisor_name }}</span>
-                  <span></span>
+                  <span>•</span>
                   <span>Hours: <strong class="text-[#00d9ff]">{{ intern.total_hours.toFixed(1) }}h</strong></span>
                 </div>
               </div>
@@ -734,12 +782,12 @@ onUnmounted(() => {
         </section>
       </div>
 
-      <!-- ================= TAB 3: APPROVED REPORTS & PERFORMANCE (BY TRAINEE) ================= -->
+      <!-- ================= TAB 3: REVIEWED REPORTS & PERFORMANCE (APPROVED + REJECTED) ================= -->
       <div v-show="activeMainTab === 'performance'" class="tab-pane-container">
         <section class="trainext-glass-card flex flex-col gap-4 p-4 sm:p-5">
           <div>
-            <h2 class="trainext-title text-sm sm:text-base">Trainee Accomplishment Records (Approved)</h2>
-            <p class="trainext-subtitle text-[11px]">Audit approved work accomplishments, submissions, and supervisor feedback grouped by trainee.</p>
+            <h2 class="trainext-title text-sm sm:text-base">Trainee Accomplishment Audits</h2>
+            <p class="trainext-subtitle text-[11px]">Audit both approved and rejected accomplishment submissions along with supervisor feedback grouped by trainee.</p>
           </div>
 
           <!-- SEARCH BAR -->
@@ -784,17 +832,16 @@ onUnmounted(() => {
                   <p class="text-xs sm:text-sm font-semibold text-white group-hover:text-[#00d9ff] transition-colors truncate">
                     {{ intern.full_name }}
                   </p>
-                  <div class="flex items-center gap-2 text-[10.5px] text-[#858994] font-mono mt-0.5">
-                    <span class="truncate max-w-[150px] text-slate-300">{{ intern.company_name }}</span>
-                    <span>•</span>
-                    <span class="text-emerald-400 font-semibold">{{ intern.approved_reports_count }} Approved Reports</span>
+                  <div class="flex flex-wrap items-center gap-2 text-[10.5px] text-[#858994] font-mono mt-0.5">
+                    <span class="text-emerald-400 font-semibold">{{ intern.approved_reports_count }} Approved</span>
+                    <span v-if="intern.rejected_reports_count > 0" class="text-rose-400 font-semibold">• {{ intern.rejected_reports_count }} Rejected</span>
                   </div>
                 </div>
               </div>
 
               <!-- VIEW ACTION -->
               <div class="flex items-center gap-2 shrink-0">
-                <span class="text-[10px] text-[#00d9ff] font-bold font-mono whitespace-nowrap">View Reports</span>
+                <span class="text-[10px] text-[#00d9ff] font-bold font-mono whitespace-nowrap">View Audits</span>
                 <svg class="w-4 h-4 text-slate-500 group-hover:text-white group-hover:translate-x-0.5 transition-all" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
                 </svg>
@@ -810,7 +857,7 @@ onUnmounted(() => {
       </footer>
     </div>
 
-    <!-- ================= FIXED BOTTOM NAV (ICON-ONLY + BLUE NOTIF DOT SA TOP RIGHT) ================= -->
+    <!-- ================= FIXED BOTTOM NAV (ICON-ONLY + AUTO-DISMISS NOTIF BADGE) ================= -->
     <nav class="fixed-bottom-bar" aria-label="Coordinator Bottom Navigation">
       <div class="bottom-bar-inner">
         <!-- TAB 1: OVERVIEW -->
@@ -829,10 +876,10 @@ onUnmounted(() => {
           <span v-if="activeMainTab === 'overview'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 2: DIRECTORY (MAY BLUE NOTIF DOT KAPAG MAY TRAINEES IN TRANSIT) -->
+        <!-- TAB 2: DIRECTORY (MAWAWALA ANG BADGE KAPAG NAPINDOT NA) -->
         <button 
           type="button" 
-          @click="activeMainTab = 'directory'"
+          @click="activeMainTab = 'directory'; hasViewedDirectoryTab = true;"
           class="bottom-nav-item"
           :class="{ active: activeMainTab === 'directory' }"
           aria-label="Live Directory"
@@ -841,15 +888,17 @@ onUnmounted(() => {
             <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
-            <span v-if="inTransitCount > 0" class="nav-notif-dot animate-pulse"></span>
+            <span v-if="activeInTransitBadgeCount > 0" class="nav-badge-count">
+              {{ activeInTransitBadgeCount > 99 ? '99+' : activeInTransitBadgeCount }}
+            </span>
           </div>
           <span v-if="activeMainTab === 'directory'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 3: APPROVED REPORTS & PERFORMANCE -->
+        <!-- TAB 3: REVIEWED REPORTS & PERFORMANCE (MAWAWALA ANG BADGE KAPAG NAPINDOT NA) -->
         <button 
           type="button" 
-          @click="activeMainTab = 'performance'"
+          @click="activeMainTab = 'performance'; hasViewedPerformanceTab = true;"
           class="bottom-nav-item"
           :class="{ active: activeMainTab === 'performance' }"
           aria-label="Trainee Accomplishments"
@@ -858,13 +907,16 @@ onUnmounted(() => {
             <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
+            <span v-if="activeReportsBadgeCount > 0" class="nav-badge-count">
+              {{ activeReportsBadgeCount > 99 ? '99+' : activeReportsBadgeCount }}
+            </span>
           </div>
           <span v-if="activeMainTab === 'performance'" class="active-dot"></span>
         </button>
       </div>
     </nav>
 
-    <!-- ================= PASILIP MODAL: APPROVED REPORTS BY TRAINEE (DATE, TITLE, DESC, FEEDBACK LANG) ================= -->
+    <!-- ================= PASILIP MODAL: AUDIT REPORTS BY TRAINEE ================= -->
     <div 
       v-if="isTraineeReportsModalOpen && selectedTraineeForReview" 
       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-md select-none overflow-y-auto"
@@ -874,10 +926,10 @@ onUnmounted(() => {
         <header class="px-5 sm:px-6 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.015]">
           <div class="min-w-0">
             <p class="text-sm sm:text-base font-bold text-white truncate font-['Aileron',sans-serif]">
-              {{ selectedTraineeForReview.full_name }} — Approved Reports
+              {{ selectedTraineeForReview.full_name }} — Accomplishment Audits
             </p>
             <p class="text-[10px] text-[#00d9ff] font-mono tracking-wider truncate mt-0.5">
-              {{ selectedTraineeForReview.company_name }} • {{ currentTraineeApprovedReports.length }} VERIFIED ENTRIES
+              {{ selectedTraineeForReview.company_name }} • {{ currentTraineeReports.length }} REVIEWED ENTRIES
             </p>
           </div>
           <button 
@@ -889,22 +941,61 @@ onUnmounted(() => {
           </button>
         </header>
 
-        <!-- STREAMLINED FEED (DATE, TITLE, DESC, FEEDBACK LANG PARA MALINIS) -->
-        <div class="p-5 sm:p-6 flex flex-col gap-3.5 overflow-y-auto max-h-[calc(80vh-75px)]">
-          <div v-if="currentTraineeApprovedReports.length === 0" class="p-8 text-center text-xs text-[#858994] font-mono">
-            No approved reports recorded yet for this trainee.
+        <!-- STATUS TOGGLE FILTER PILLS SA LOOB NG MODAL -->
+        <div class="px-5 sm:px-6 pt-3 flex items-center gap-2 border-b border-white/5 pb-2">
+          <button
+            type="button"
+            @click="reportStatusFilter = 'all'"
+            class="px-3 py-1 rounded-full text-[10px] font-mono uppercase tracking-wider transition cursor-pointer"
+            :class="reportStatusFilter === 'all' ? 'bg-cyan-500/20 text-[#00d9ff] border border-cyan-500/40 font-bold' : 'text-slate-400 hover:text-white'"
+          >
+            All ({{ selectedTraineeForReview.reviewed_reports_count }})
+          </button>
+          <button
+            type="button"
+            @click="reportStatusFilter = 'approved'"
+            class="px-3 py-1 rounded-full text-[10px] font-mono uppercase tracking-wider transition cursor-pointer"
+            :class="reportStatusFilter === 'approved' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold' : 'text-slate-400 hover:text-white'"
+          >
+            Approved ({{ selectedTraineeForReview.approved_reports_count }})
+          </button>
+          <button
+            type="button"
+            @click="reportStatusFilter = 'rejected'"
+            class="px-3 py-1 rounded-full text-[10px] font-mono uppercase tracking-wider transition cursor-pointer"
+            :class="reportStatusFilter === 'rejected' ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 font-bold' : 'text-slate-400 hover:text-white'"
+          >
+            Rejected ({{ selectedTraineeForReview.rejected_reports_count }})
+          </button>
+        </div>
+
+        <!-- STREAMLINED FEED (DATE, TITLE, DESC, STATUS, FEEDBACK) -->
+        <div class="p-5 sm:p-6 flex flex-col gap-3.5 overflow-y-auto max-h-[calc(80vh-120px)]">
+          <div v-if="currentTraineeReports.length === 0" class="p-8 text-center text-xs text-[#858994] font-mono">
+            No accomplishment reports found under '{{ reportStatusFilter }}' filter for this trainee.
           </div>
 
           <div 
-            v-for="rep in currentTraineeApprovedReports" 
+            v-for="rep in currentTraineeReports" 
             :key="rep.id"
-            class="p-4 rounded-2xl bg-white/[0.02] border border-white/10 flex flex-col gap-2.5"
+            class="p-4 rounded-2xl bg-white/[0.02] border flex flex-col gap-2.5 transition-colors"
+            :class="rep.status === 'approved' ? 'border-white/10 hover:border-emerald-500/30' : 'border-rose-500/20 bg-rose-950/[0.03] hover:border-rose-500/40'"
           >
-            <!-- DATE & TITLE ROW -->
+            <!-- DATE, TITLE & STATUS ROW -->
             <div class="flex items-start justify-between gap-2">
-              <p class="text-xs sm:text-sm font-bold text-white tracking-wide">
-                {{ rep.title }}
-              </p>
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <p class="text-xs sm:text-sm font-bold text-white tracking-wide truncate">
+                    {{ rep.title }}
+                  </p>
+                  <span 
+                    class="trainext-chip text-[8.5px] uppercase font-mono shrink-0"
+                    :class="rep.status === 'approved' ? 'chip-emerald' : 'chip-rose'"
+                  >
+                    {{ rep.status }}
+                  </span>
+                </div>
+              </div>
               <span class="text-[10px] font-mono text-[#00d9ff] font-semibold shrink-0">
                 {{ rep.report_date }}
               </span>
@@ -915,16 +1006,22 @@ onUnmounted(() => {
               {{ rep.description }}
             </p>
 
-            <!-- SUPERVISOR FEEDBACK -->
+            <!-- SUPERVISOR FEEDBACK REMARKS -->
             <div 
               v-if="rep.feedback" 
-              class="p-2.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 text-emerald-200 text-xs flex flex-col gap-0.5 mt-1"
+              class="p-2.5 rounded-xl border text-xs flex flex-col gap-0.5 mt-1"
+              :class="rep.status === 'approved' 
+                ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200' 
+                : 'bg-rose-950/30 border-rose-500/30 text-rose-200'"
             >
-              <span class="text-[8.5px] font-bold uppercase tracking-wider text-emerald-400 font-mono flex items-center gap-1">
+              <span 
+                class="text-[8.5px] font-bold uppercase tracking-wider font-mono flex items-center gap-1"
+                :class="rep.status === 'approved' ? 'text-emerald-400' : 'text-rose-400'"
+              >
                 <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
                 </svg>
-                <span>SUPERVISOR REMARKS:</span>
+                <span>{{ rep.status === 'approved' ? 'SUPERVISOR REMARKS' : 'SUPERVISOR REJECTION REASON' }}:</span>
               </span>
               <p class="leading-relaxed">{{ rep.feedback }}</p>
             </div>
@@ -989,7 +1086,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* STICKY HEADER (FLAT EDGE-TO-EDGE, ZERO CORNER ROUNDING) */
+/* STICKY HEADER */
 .sticky-coordinator-header {
   position: sticky !important;
   top: 0 !important;
@@ -1072,7 +1169,7 @@ onUnmounted(() => {
   transform: scale(0.99);
 }
 
-/* SEARCH INPUT WITH SMALLER PLACEHOLDER FONT */
+/* SEARCH INPUT */
 .search-input-field {
   width: 100%;
   height: 40px;
@@ -1097,9 +1194,7 @@ onUnmounted(() => {
   box-shadow: 0 0 10px rgba(0, 217, 255, 0.25);
 }
 
-/* ================= ERGONOMIC PILL BUTTON STANDARDS ================= */
-
-/* CYAN PILL (DTR AUDIT, SUMMARY PDF) */
+/* ERGONOMIC PILL BUTTONS */
 .pill-cyan-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -1133,7 +1228,6 @@ onUnmounted(() => {
   transform: scale(0.96) !important;
 }
 
-/* NEUTRAL PILL (EXPORT MASTER CSV) */
 .pill-neutral-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -1158,7 +1252,6 @@ onUnmounted(() => {
   border-color: rgba(255, 255, 255, 0.35) !important;
 }
 
-/* MODAL SIGN OUT BUTTON */
 .modal-signout-btn {
   display: inline-flex;
   align-items: center;
@@ -1186,7 +1279,6 @@ onUnmounted(() => {
   transform: scale(0.97);
 }
 
-/* SPINNER RING */
 .spinner-ring {
   width: 14px;
   height: 14px;
@@ -1203,7 +1295,7 @@ onUnmounted(() => {
   }
 }
 
-/* FIXED CYBER-GLASS BOTTOM NAVIGATION (ICON-ONLY) */
+/* FIXED BOTTOM NAV */
 .fixed-bottom-bar {
   position: fixed;
   bottom: 0;
@@ -1259,20 +1351,29 @@ onUnmounted(() => {
   transform: translateY(-2px);
 }
 
-/* BLUE / CYAN NOTIFICATION BADGE SA TOP-RIGHT NG ICON */
-.nav-notif-dot {
+.nav-badge-count {
   position: absolute;
-  top: -3px;
-  right: -5px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
+  top: -6px;
+  right: -9px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9999px;
   background: #00d9ff;
-  box-shadow: 0 0 8px #00d9ff;
+  color: #050811;
+  font-family: "Aileron", -apple-system, sans-serif;
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 10px rgba(0, 217, 255, 0.7);
   border: 1.5px solid #070b12;
+  user-select: none;
+  pointer-events: none;
 }
 
-/* ACTIVE TAB INDICATOR SA ILALIM */
 .active-dot {
   position: absolute;
   bottom: 6px;

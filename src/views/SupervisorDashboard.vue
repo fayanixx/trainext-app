@@ -35,6 +35,10 @@ const showSignOutConfirm = ref(false);
 const isSigningOut = ref(false);
 const isInitialLoading = ref(true);
 
+// State para sa pag-track kung nabisita na ang tabs (notif auto-dismiss)
+const hasViewedReportsTab = ref(false);
+const hasViewedTraineesTab = ref(false);
+
 // Focused Detail Modal para sa Report Review
 const selectedReportForReview = ref<any | null>(null);
 const isReportReviewModalOpen = ref(false);
@@ -55,7 +59,9 @@ const approvedInterns = ref<any[]>([]);
 const modalFeedbackText = ref('');
 const selectedBatchIds = ref<string[]>([]);
 const isBatchProcessing = ref(false);
-const isSubmittingReview = ref(false);
+
+// Hiwalay na state para sa Approve vs Reject button loading
+const reviewActionState = ref<'approving' | 'rejecting' | null>(null);
 
 // Search & Filter State para sa Reports Tab
 const searchQuery = ref('');
@@ -69,6 +75,39 @@ const pendingReviewLogs = computed(() => {
 });
 
 const pendingCount = computed(() => pendingReviewLogs.value.length);
+
+// Dismissible Notification Badges Logic
+const activeReportsBadgeCount = computed(() => {
+  if (hasViewedReportsTab.value) return 0;
+  return pendingCount.value;
+});
+
+const activeTraineesBadgeCount = computed(() => {
+  if (hasViewedTraineesTab.value) return 0;
+  return pendingInterns.value.length;
+});
+
+watch(activeMainTab, (newTab) => {
+  if (newTab === 'reports') {
+    hasViewedReportsTab.value = true;
+  } else if (newTab === 'trainees') {
+    hasViewedTraineesTab.value = true;
+  }
+});
+
+// Kapag may bagong pumasok na pending report habang wala sa reports tab, ibalik ang badge
+watch(pendingCount, (newVal, oldVal) => {
+  if (newVal > oldVal && activeMainTab.value !== 'reports') {
+    hasViewedReportsTab.value = false;
+  }
+});
+
+// Kapag may bagong dumating na intern request habang wala sa trainees tab, ibalik ang badge
+watch(() => pendingInterns.value.length, (newVal, oldVal) => {
+  if (newVal > oldVal && activeMainTab.value !== 'trainees') {
+    hasViewedTraineesTab.value = false;
+  }
+});
 
 // Filtered Reports (Search + Filter Tab)
 const filteredLogs = computed(() => {
@@ -238,12 +277,13 @@ const openTraineeReports = (trainee: any) => {
   isTraineeReportsModalOpen.value = true;
 };
 
-// Submit Review (Approve / Reject) sa Modal
+// Submit Review (Approve / Reject) sa Modal nang may partikular na action state
 const handleReview = async (status: 'approved' | 'rejected') => {
   if (!selectedReportForReview.value) return;
   const logId = selectedReportForReview.value.id;
   const targetLog = selectedReportForReview.value;
-  isSubmittingReview.value = true;
+  
+  reviewActionState.value = status === 'approved' ? 'approving' : 'rejecting';
 
   try {
     if (typeof (accomplishmentsStore as any).reviewLog === 'function') {
@@ -279,7 +319,7 @@ const handleReview = async (status: 'approved' | 'rejected') => {
   } catch (err: any) {
     toast.error(err.message || 'Review action failed.', 'REVIEW ERROR');
   } finally {
-    isSubmittingReview.value = false;
+    reviewActionState.value = null;
   }
 };
 
@@ -419,10 +459,10 @@ onUnmounted(() => {
     <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
     <!-- FULLSCREEN BRANDED SPINNERS -->
-    <TraiNextSpinner v-if="isInitialLoading" label="Signing In..." />
+    <TraiNextSpinner v-if="isInitialLoading" label="Loading..." />
     <TraiNextSpinner v-if="isSigningOut" label="Signing Out..." />
 
-    <!-- STICKY HEADER (ORIHINAL NA PAIKOT AT ALIGNMENT SA LOOB, WALANG CORNER ROUNDING PARA FLAT SA SCROLL) -->
+    <!-- STICKY HEADER -->
     <header class="trainext-glass-card sticky-supervisor-header flex items-center justify-between gap-2 px-3.5 sm:px-5 py-3">
       <div class="trainext-brand-group flex items-center gap-2.5 min-w-0">
         <img src="/assets/trainext-logo.png" alt="TraiNext" class="w-8 h-8 sm:w-9 sm:h-9 object-contain shrink-0" />
@@ -489,7 +529,6 @@ onUnmounted(() => {
 
         <!-- GEOFENCE OFFICE SITE CARD WITH LEAFLET MINI-MAP -->
         <section class="trainext-glass-card flex flex-col gap-3.5 p-4 sm:p-5">
-          <!-- CARD HEADER (MALINIS ANG TITLE AT SUBTITLE) -->
           <div>
             <p class="text-xs sm:text-[13px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
               Office Site Geofence Perimeter
@@ -502,7 +541,6 @@ onUnmounted(() => {
           </div>
 
           <div v-else-if="site" class="flex flex-col gap-3">
-            <!-- SITE DETAILS ROW: HINDI BABABA ANG EDIT BUTTON KAHIT SA MOBILE, NAKA-LOCK SA RIGHT SIDE -->
             <div class="p-3.5 rounded-2xl bg-white/[0.02] border border-white/10 flex flex-row items-center justify-between gap-3">
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
@@ -512,7 +550,6 @@ onUnmounted(() => {
                 <p class="text-xs text-slate-300 truncate mt-0.5 font-mono">{{ site.office_address }}</p>
               </div>
 
-              <!-- EDIT PERIMETER ACTION BUTTON: WHITESPACE-NOWRAP AT SHRINK-0 PARA HINDI BUMABA -->
               <button 
                 type="button" 
                 @click="isGeofenceModalOpen = true"
@@ -536,7 +573,6 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- UNCONFIGURED STATE -->
           <div v-else class="p-6 rounded-2xl border border-dashed border-white/20 text-center flex flex-col items-center gap-3">
             <p class="text-xs text-[#858994]">No office geofence configured yet. Trainees will not be able to clock in until perimeter is set.</p>
             <button 
@@ -556,7 +592,6 @@ onUnmounted(() => {
       <!-- ================= TAB 2: REPORTS ================= -->
       <div v-show="activeMainTab === 'reports'" class="tab-pane-container">
         <section class="trainext-glass-card flex flex-col gap-4 p-4 sm:p-5">
-          <!-- TOP BAR -->
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 class="trainext-title text-sm sm:text-base">Trainee Accomplishment Reports</h2>
@@ -584,7 +619,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- SEARCH INPUT BAR (MAS PALIIT NA PLACEHOLDER FONT SIZE) -->
+          <!-- SEARCH INPUT BAR -->
           <div class="relative flex items-center w-full">
             <svg class="w-4 h-4 text-slate-400 absolute left-3.5 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -625,7 +660,7 @@ onUnmounted(() => {
             No reports found for '{{ searchQuery || activeFilter }}'.
           </div>
 
-          <!-- COMPACT REPORT CARDS (WALANG HRS RENDERED, P TAG LANG) -->
+          <!-- COMPACT REPORT CARDS -->
           <div v-else class="flex flex-col gap-2">
             <div 
               v-for="log in filteredLogs" 
@@ -679,7 +714,7 @@ onUnmounted(() => {
 
       <!-- ================= TAB 3: TRAINEES ================= -->
       <div v-show="activeMainTab === 'trainees'" class="tab-pane-container">
-        <!-- PENDING AFFILIATION REQUESTS (HINDI NAPUPUTOL KAHIT SAAN DEVICES) -->
+        <!-- PENDING AFFILIATION REQUESTS -->
         <section class="trainext-glass-card flex flex-col gap-3.5 p-4 sm:p-5">
           <div class="flex items-center justify-between gap-2">
             <div>
@@ -706,7 +741,6 @@ onUnmounted(() => {
                 <p class="text-[11px] text-[#858994] font-mono mt-0.5 truncate">{{ link.intern?.email }}</p>
               </div>
 
-              <!-- ACTIONS: WHITESPACE-NOWRAP AT SHRINK-0 PARA HINDI MAPUTOL -->
               <div class="flex items-center gap-2 shrink-0">
                 <button 
                   type="button" 
@@ -727,7 +761,7 @@ onUnmounted(() => {
           </div>
         </section>
 
-        <!-- APPROVED TRAINEES ROSTER (PINIPINDOT PARA MAKITA ANG MGA REPORTS NILA) -->
+        <!-- APPROVED TRAINEES ROSTER -->
         <section class="trainext-glass-card flex flex-col gap-3.5 p-4 sm:p-5">
           <div>
             <p class="text-xs sm:text-[13px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
@@ -778,7 +812,7 @@ onUnmounted(() => {
       </footer>
     </div>
 
-    <!-- ================= FIXED BOTTOM NAV (ICON-ONLY + BLUE NOTIF DOT SA TOP RIGHT) ================= -->
+    <!-- ================= FIXED BOTTOM NAV (ICON-ONLY + AUTO-DISMISS NOTIF BADGE) ================= -->
     <nav class="fixed-bottom-bar" aria-label="Supervisor Bottom Navigation">
       <div class="bottom-bar-inner">
         <!-- TAB 1: OVERVIEW -->
@@ -797,10 +831,10 @@ onUnmounted(() => {
           <span v-if="activeMainTab === 'overview'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 2: REPORTS (MAY BLUE NOTIF DOT KAPAG MAY PENDING REPORTS) -->
+        <!-- TAB 2: REPORTS (MAWAWALA ANG BADGE KAPAG NAPINDOT NA) -->
         <button 
           type="button" 
-          @click="activeMainTab = 'reports'"
+          @click="activeMainTab = 'reports'; hasViewedReportsTab = true;"
           class="bottom-nav-item"
           :class="{ active: activeMainTab === 'reports' }"
           aria-label="Reports Review"
@@ -809,16 +843,17 @@ onUnmounted(() => {
             <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            <!-- BLUE NOTIF BADGE (TOP RIGHT) -->
-            <span v-if="pendingCount > 0" class="nav-notif-dot animate-pulse"></span>
+            <span v-if="activeReportsBadgeCount > 0" class="nav-badge-count">
+              {{ activeReportsBadgeCount > 99 ? '99+' : activeReportsBadgeCount }}
+            </span>
           </div>
           <span v-if="activeMainTab === 'reports'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 3: TRAINEES (MAY BLUE NOTIF DOT KAPAG MAY PENDING AFFILIATIONS) -->
+        <!-- TAB 3: TRAINEES (MAWAWALA ANG BADGE KAPAG NAPINDOT NA) -->
         <button 
           type="button" 
-          @click="activeMainTab = 'trainees'"
+          @click="activeMainTab = 'trainees'; hasViewedTraineesTab = true;"
           class="bottom-nav-item"
           :class="{ active: activeMainTab === 'trainees' }"
           aria-label="Trainees Management"
@@ -827,8 +862,9 @@ onUnmounted(() => {
             <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
-            <!-- BLUE NOTIF BADGE (TOP RIGHT) -->
-            <span v-if="pendingInterns.length > 0" class="nav-notif-dot animate-pulse"></span>
+            <span v-if="activeTraineesBadgeCount > 0" class="nav-badge-count">
+              {{ activeTraineesBadgeCount > 99 ? '99+' : activeTraineesBadgeCount }}
+            </span>
           </div>
           <span v-if="activeMainTab === 'trainees'" class="active-dot"></span>
         </button>
@@ -937,23 +973,26 @@ onUnmounted(() => {
               class="w-full p-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white placeholder:text-[#858994] outline-none focus:border-[#00d9ff] resize-none"
             ></textarea>
 
+            <!-- INDEPENDENT LOADING STATE BUTTONS -->
             <div class="flex items-center justify-end gap-2.5 pt-3">
               <button 
                 type="button"
                 @click="handleReview('rejected')"
-                :disabled="isSubmittingReview"
+                :disabled="reviewActionState !== null"
                 class="pill-rose-btn cursor-pointer whitespace-nowrap"
               >
-                Reject Report
+                <div v-if="reviewActionState === 'rejecting'" class="spinner-ring border-rose-400"></div>
+                <span>{{ reviewActionState === 'rejecting' ? 'Rejecting...' : 'Reject Report' }}</span>
               </button>
+
               <button 
                 type="button"
                 @click="handleReview('approved')"
-                :disabled="isSubmittingReview"
+                :disabled="reviewActionState !== null"
                 class="pill-cyan-btn cursor-pointer whitespace-nowrap"
               >
-                <div v-if="isSubmittingReview" class="spinner-ring border-[#00d9ff]"></div>
-                <span>Approve Report</span>
+                <div v-if="reviewActionState === 'approving'" class="spinner-ring border-[#00d9ff]"></div>
+                <span>{{ reviewActionState === 'approving' ? 'Approving...' : 'Approve Report' }}</span>
               </button>
             </div>
           </div>
@@ -1108,12 +1147,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* STICKY HEADER (FLAT EDGE-TO-EDGE, WALANG CORNER ROUNDING PARA NATURAL PAG NAG-SCROLL) */
+/* STICKY HEADER */
 .sticky-supervisor-header {
   position: sticky !important;
   top: 0 !important;
   z-index: 40 !important;
-  border-radius: 0 !important; /* Inalis ang corner rounding */
+  border-radius: 0 !important;
   border-left: 0 !important;
   border-right: 0 !important;
   border-top: 0 !important;
@@ -1189,7 +1228,7 @@ onUnmounted(() => {
   transform: scale(0.99);
 }
 
-/* SEARCH INPUT WITH SMALLER PLACEHOLDER FONT */
+/* SEARCH INPUT */
 .search-reports-input {
   width: 100%;
   height: 40px;
@@ -1214,9 +1253,7 @@ onUnmounted(() => {
   box-shadow: 0 0 10px rgba(0, 217, 255, 0.25);
 }
 
-/* ================= ERGONOMIC PILL BUTTON STANDARDS ================= */
-
-/* CYAN PILL (EDIT PERIMETER, APPROVE) */
+/* ERGONOMIC PILL BUTTON STANDARDS */
 .pill-cyan-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -1250,7 +1287,6 @@ onUnmounted(() => {
   transform: scale(0.96) !important;
 }
 
-/* ROSE / RED PILL (REJECT, DECLINE) */
 .pill-rose-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -1284,7 +1320,6 @@ onUnmounted(() => {
   transform: scale(0.96) !important;
 }
 
-/* EMERALD GREEN PILL (ACCEPT INTERN) */
 .pill-emerald-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -1318,7 +1353,6 @@ onUnmounted(() => {
   transform: scale(0.96) !important;
 }
 
-/* NEUTRAL PILL (DESELECT / CANCEL) */
 .pill-neutral-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -1342,7 +1376,6 @@ onUnmounted(() => {
   border-color: rgba(255, 255, 255, 0.35) !important;
 }
 
-/* MODAL SIGN OUT BUTTON */
 .modal-signout-btn {
   display: inline-flex;
   align-items: center;
@@ -1370,7 +1403,6 @@ onUnmounted(() => {
   transform: scale(0.97);
 }
 
-/* SPINNER RING */
 .spinner-ring {
   width: 14px;
   height: 14px;
@@ -1448,7 +1480,7 @@ onUnmounted(() => {
 .report-tabs-nav .tab-divider:nth-of-type(2) { left: 50%; }
 .report-tabs-nav .tab-divider:nth-of-type(3) { left: 75%; }
 
-/* FIXED CYBER-GLASS BOTTOM NAVIGATION (ICON-ONLY) */
+/* FIXED CYBER-GLASS BOTTOM NAVIGATION */
 .fixed-bottom-bar {
   position: fixed;
   bottom: 0;
@@ -1504,17 +1536,28 @@ onUnmounted(() => {
   transform: translateY(-2px);
 }
 
-/* BLUE / CYAN NOTIFICATION BADGE SA TOP-RIGHT NG ICON */
-.nav-notif-dot {
+/* NOTIFICATION BADGE NA MAY BILANG */
+.nav-badge-count {
   position: absolute;
-  top: -3px;
-  right: -5px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
+  top: -6px;
+  right: -9px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9999px;
   background: #00d9ff;
-  box-shadow: 0 0 8px #00d9ff;
+  color: #050811;
+  font-family: "Aileron", -apple-system, sans-serif;
+  font-size: 9.5px;
+  font-weight: 800;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 10px rgba(0, 217, 255, 0.7);
   border: 1.5px solid #070b12;
+  user-select: none;
+  pointer-events: none;
 }
 
 /* ACTIVE TAB INDICATOR SA ILALIM */

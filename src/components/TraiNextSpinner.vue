@@ -21,7 +21,7 @@ withDefaults(
       <img
         src="/assets/trainext-logo.png"
         alt="TraiNext"
-        class="w-32 sm:w-40 h-auto object-contain drop-shadow-[0_0_30px_rgba(0,217,255,0.4)]"
+        class="w-37 sm:w-45 h-auto object-contain drop-shadow-[0_0_30px_rgba(0,217,255,0.4)]"
       />
 
       <!-- Spinner at Centered Loading Text sa Ibaba -->
