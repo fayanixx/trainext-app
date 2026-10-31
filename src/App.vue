@@ -150,6 +150,18 @@ onMounted(async () => {
 });
 </script>
 
+<style>
+/* Global Safe Area para hindi sumayad ang header sa status bar / camera notch */
+:root {
+  --ion-safe-area-top: env(safe-area-inset-top, 28px);
+}
+
+ion-header,
+header {
+  padding-top: max(env(safe-area-inset-top), 24px) !important;
+}
+</style>
+
 <style scoped>
 /* Smooth fade out ng splash screen */
 .fade-leave-active {
