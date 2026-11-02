@@ -30,6 +30,7 @@ let supervisorMap: L.Map | null = null;
 let supervisorSiteCircle: L.Circle | null = null;
 let supervisorSiteMarker: L.Marker | null = null;
 
+
 /**
  * Active Navigation Tab State ('overview' | 'reports' | 'trainees')
  */
@@ -44,6 +45,22 @@ const isProofViewerOpen = ref(false);
 const showSignOutConfirm = ref(false);
 const isSigningOut = ref(false);
 const isInitialLoading = ref(true);
+
+/**
+ * Manual Data Synchronization Handler for Supervisor
+ */
+const handleManualRefresh = async () => {
+  if (!authStore.user?.id) return;
+  isInitialLoading.value = true;
+  try {
+    await accomplishmentsStore.fetchSupervisorLogs(authStore.user.id);
+    toast.success('Data synchronized successfully.', 'REFRESHED');
+  } catch (err: any) {
+    toast.error('Failed to sync data.', 'ERROR');
+  } finally {
+    isInitialLoading.value = false;
+  }
+};
 
 /**
  * Notification Badge Dismissal Tracking Flags
@@ -554,6 +571,20 @@ onUnmounted(() => {
       </div>
 
       <div class="flex items-center gap-2 shrink-0">
+        <!-- REFRESH BUTTON -->
+        <button 
+          type="button" 
+          @click="handleManualRefresh"
+          class="header-action-btn flex items-center justify-center cursor-pointer transition-all"
+          title="Refresh Data"
+          aria-label="Refresh Data"
+        >
+          <svg class="w-4 h-4 text-slate-300 hover:text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
+
+        <!-- SETTING BUTTON -->
         <button 
           type="button" 
           @click="isProfileSettingsOpen = true"
@@ -567,6 +598,7 @@ onUnmounted(() => {
           </svg>
         </button>
 
+        <!-- SIGNOUT BUTTON -->
         <button 
           type="button" 
           @click="showSignOutConfirm = true"

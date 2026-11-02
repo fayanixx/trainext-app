@@ -42,6 +42,22 @@ const isSigningOut = ref(false);
 const isInitialLoading = ref(true);
 
 /**
+ * Manual Data Synchronization Handler for Coordinator
+ */
+const handleManualRefresh = async () => {
+  isInitialLoading.value = true;
+  try {
+    await fetchMasterData();
+    toast.success('Data synchronized successfully.', 'REFRESHED');
+  } catch (err: any) {
+    toast.error('Failed to sync data.', 'ERROR');
+  } finally {
+    isInitialLoading.value = false;
+  }
+};
+
+
+/**
  * Persistent Notification Badge State via LocalStorage
  */
 const STORAGE_KEY_DIR = 'trainext_coord_viewed_directory';
@@ -531,6 +547,20 @@ onUnmounted(() => {
       </div>
 
       <div class="flex items-center gap-2 shrink-0">
+        <!-- 1. REFRESH BUTTON -->
+        <button 
+          type="button" 
+          @click="handleManualRefresh"
+          class="header-action-btn flex items-center justify-center cursor-pointer transition-all"
+          title="Refresh Data"
+          aria-label="Refresh Data"
+        >
+          <svg class="w-4 h-4 text-slate-300 hover:text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
+
+        <!-- 2. SETTING BUTTON -->
         <button 
           type="button" 
           @click="isProfileSettingsOpen = true"
@@ -544,6 +574,7 @@ onUnmounted(() => {
           </svg>
         </button>
 
+        <!-- 3. SIGNOUT BUTTON -->
         <button 
           type="button" 
           @click="showSignOutConfirm = true"

@@ -39,6 +39,26 @@ let internSiteCircle: L.Circle | null = null;
 let internSiteMarker: L.Marker | null = null;
 
 /**
+ * Manual Data Synchronization Handler for Mobile & Web
+ */
+const handleManualRefresh = async () => {
+  if (!authStore.user?.id) return;
+  isInitialLoading.value = true;
+  try {
+    await Promise.all([
+      attendanceStore.fetchTodayShift(authStore.user.id),
+      attendanceStore.fetchAttendanceHistory(authStore.user.id),
+      accomplishmentsStore.fetchInternLogs(authStore.user.id)
+    ]);
+    toast.success('Data synchronized successfully.', 'REFRESHED');
+  } catch (err: any) {
+    toast.error('Failed to sync data.', 'ERROR');
+  } finally {
+    isInitialLoading.value = false;
+  }
+};
+
+/**
  * Active Navigation Tab State ('home' | 'reports' | 'attendance')
  */
 const activeMainTab = ref<'home' | 'reports' | 'attendance'>('home');
@@ -595,6 +615,20 @@ onUnmounted(() => {
       </div>
 
       <div class="flex items-center gap-2 shrink-0">
+        <!-- REFRESH BUTTON -->
+        <button 
+          type="button" 
+          @click="handleManualRefresh"
+          class="header-action-btn flex items-center justify-center cursor-pointer transition-all"
+          title="Refresh Data"
+          aria-label="Refresh Data"
+        >
+          <svg class="w-4 h-4 text-slate-300 hover:text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
+
+        <!-- SETTING BUTTON -->
         <button 
           type="button" 
           @click="isProfileSettingsOpen = true"
@@ -608,6 +642,7 @@ onUnmounted(() => {
           </svg>
         </button>
 
+        <!-- SIGNOUT BUTTON -->
         <button 
           type="button" 
           @click="showSignOutConfirm = true"
