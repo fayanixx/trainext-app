@@ -1,15 +1,66 @@
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { supabase } from '@/lib/supabase';
 import type { AccomplishmentLog } from '@/types';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export const useAccomplishmentsStore = defineStore('accomplishments', () => {
+  /**
+   * Reactive Accomplishments State
+   */
   const logs = ref<AccomplishmentLog[]>([]);
   const supervisorPendingLogs = ref<any[]>([]);
   const loading = ref(false);
   const errorMessage = ref<string | null>(null);
 
+  /**
+   * Persistent LocalStorage Storage Key for Read Notification State Management
+   */
+  const STORAGE_KEY = 'trainext_read_report_ids';
+  const readLogIds = ref<Set<string>>(
+    new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'))
+  );
+
+  let realtimeChannel: RealtimeChannel | null = null;
+
+  /**
+   * Synchronizes Read Notification IDs to LocalStorage
+   */
+  const saveReadIds = () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(readLogIds.value)));
+  };
+
+  /**
+   * Marks a specific report record as read
+   */
+  const markAsRead = (logId: string) => {
+    if (!logId) return;
+    readLogIds.value.add(logId);
+    saveReadIds();
+  };
+
+  /**
+   * Marks all loaded accomplishment report records as read
+   */
+  const markAllAsRead = () => {
+    logs.value.forEach((l) => readLogIds.value.add(l.id));
+    saveReadIds();
+  };
+
+  /**
+   * Computed Unread Reports Count (Reports with pending feedback or updated status)
+   */
+  const unreadCount = computed(() => {
+    return logs.value.filter(
+      (l) => !readLogIds.value.has(l.id) && (l.feedback || l.status !== 'pending')
+    ).length;
+  });
+
   const BUCKET_NAME = 'proofs';
+
+  /**
+   * Uploads verification proof attachments to designated Supabase Storage Bucket
+   */
   const uploadProofFile = async (
     file: File,
     folder: 'images' | 'documents' | 'videos'
@@ -33,6 +84,9 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
     return data.publicUrl;
   };
 
+  /**
+   * Fetches accomplishment reports submitted by a specific intern
+   */
   const fetchInternLogs = async (internId: string) => {
     if (!internId) return [];
     loading.value = true;
@@ -57,6 +111,9 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
     }
   };
 
+  /**
+   * Submits a new accomplishment report and auto-assigns supervisor mapping if unassigned
+   */
   const createLog = async (payload: {
     internId?: string;
     intern_id?: string;
@@ -86,7 +143,7 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
 
       let supervisor_id = payload.supervisorId || payload.supervisor_id || null;
 
-      // Kung walang naipasa, kuhanin ang naka-assign na supervisor mula sa profile ng intern
+      // Fallback: Fetch assigned supervisor ID from profile if omitted in payload
       if (!supervisor_id) {
         const { data: prof } = await supabase
           .from('profiles')
@@ -137,6 +194,7 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
       if (error) throw error;
 
       logs.value.unshift(data as AccomplishmentLog);
+      markAsRead(data.id);
       return data as AccomplishmentLog;
     } catch (err: any) {
       errorMessage.value = err.message || 'Failed to submit accomplishment report.';
@@ -146,45 +204,50 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
     }
   };
 
-    const fetchSupervisorLogs = async (supervisorId: string) => {
-        loading.value = true;
-        errorMessage.value = null;
+  /**
+   * Fetches accomplishment reports assigned to or under the jurisdiction of a supervisor
+   */
+  const fetchSupervisorLogs = async (supervisorId: string) => {
+    loading.value = true;
+    errorMessage.value = null;
 
-        try {
-          // 1. Hanapin ang IDs ng mga interns na naka-link sa supervisor na ito
-          const { data: linkedInterns } = await supabase
-            .from('intern_supervisor_links')
-            .select('intern_id')
-            .eq('supervisor_id', supervisorId);
+    try {
+      // 1. Fetch linked intern IDs mapped to supervisor
+      const { data: linkedInterns } = await supabase
+        .from('intern_supervisor_links')
+        .select('intern_id')
+        .eq('supervisor_id', supervisorId);
 
-          const internIds = (linkedInterns || []).map((l: any) => l.intern_id);
+      const internIds = (linkedInterns || []).map((l: any) => l.intern_id);
 
-          // 2. Kunin ang reports kung saan supervisor_id ang user O galing sa kanyang mga interns
-          let query = supabase
-            .from('accomplishment_reports')
-            .select('*')
-            .order('created_at', { ascending: false });
+      // 2. Query reports mapped directly or assigned via intern relationships
+      let query = supabase
+        .from('accomplishment_reports')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-          if (internIds.length > 0) {
-            query = query.or(`supervisor_id.eq.${supervisorId},intern_id.in.(${internIds.join(',')})`);
-          } else {
-            // Fallback: Kunin ang reports na nakaturo sa supervisor_id o lahat kung iisa lang ang supervisor
-            query = query.or(`supervisor_id.eq.${supervisorId},supervisor_id.is.null`);
-          }
+      if (internIds.length > 0) {
+        query = query.or(`supervisor_id.eq.${supervisorId},intern_id.in.(${internIds.join(',')})`);
+      } else {
+        query = query.or(`supervisor_id.eq.${supervisorId},supervisor_id.is.null`);
+      }
 
-          const { data: reports, error: reportsErr } = await query;
-          if (reportsErr) throw reportsErr;
+      const { data: reports, error: reportsErr } = await query;
+      if (reportsErr) throw reportsErr;
 
-          return await attachInternProfiles(reports || []);
-        } catch (err: any) {
-          console.error('Error fetching supervisor accomplishments:', err.message);
-          errorMessage.value = err.message;
-          return [];
-        } finally {
-          loading.value = false;
-        }
-      };
+      return await attachInternProfiles(reports || []);
+    } catch (err: any) {
+      console.error('Error fetching supervisor accomplishments:', err.message);
+      errorMessage.value = err.message;
+      return [];
+    } finally {
+      loading.value = false;
+    }
+  };
 
+  /**
+   * Attaches intern profile metadata to raw accomplishment report records
+   */
   const attachInternProfiles = async (reports: any[]) => {
     if (!reports.length) {
       supervisorPendingLogs.value = [];
@@ -210,13 +273,15 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
       },
     }));
 
-    // Inia-assign sa parehong arrays para automatic na mabasa ng SupervisorDashboard
     supervisorPendingLogs.value = merged;
     logs.value = merged as AccomplishmentLog[];
 
     return merged;
   };
 
+  /**
+   * Updates review status and remarks for a single accomplishment report
+   */
   const reviewLog = async (params: {
     logId: string;
     status: 'approved' | 'rejected';
@@ -262,6 +327,9 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
     }
   };
 
+  /**
+   * Performs batch approval for multiple pending accomplishment reports
+   */
   const batchApproveLogs = async (logIds: string[]) => {
     if (!logIds.length) return;
     loading.value = true;
@@ -301,11 +369,56 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
     }
   };
 
+  /**
+   * Establishes real-time PostgreSQL replication listener for accomplishment report updates
+   */
+  const subscribeToRealtime = (userId: string, role: 'intern' | 'supervisor' | 'coordinator') => {
+    if (realtimeChannel) {
+      supabase.removeChannel(realtimeChannel);
+    }
+
+    const filterField = role === 'intern' ? `intern_id=eq.${userId}` : undefined;
+
+    realtimeChannel = supabase
+      .channel(`accomplishments-live-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'accomplishment_reports',
+          filter: filterField,
+        },
+        async () => {
+          if (role === 'intern') {
+            await fetchInternLogs(userId);
+          } else {
+            await fetchSupervisorLogs(userId);
+          }
+        }
+      )
+      .subscribe();
+  };
+
+  /**
+   * Disconnects active real-time channel subscription
+   */
+  const unsubscribeRealtime = () => {
+    if (realtimeChannel) {
+      supabase.removeChannel(realtimeChannel);
+      realtimeChannel = null;
+    }
+  };
+
   return {
     logs,
     supervisorPendingLogs,
     loading,
     errorMessage,
+    readLogIds,
+    unreadCount,
+    markAsRead,
+    markAllAsRead,
     uploadProofFile,
     fetchInternLogs,
     createLog,
@@ -313,5 +426,7 @@ export const useAccomplishmentsStore = defineStore('accomplishments', () => {
     fetchSupervisorLogs,
     reviewLog,
     batchApproveLogs,
+    subscribeToRealtime,
+    unsubscribeRealtime,
   };
 });

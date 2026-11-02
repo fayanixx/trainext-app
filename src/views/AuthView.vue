@@ -31,6 +31,16 @@ const isSubmittingRole = ref(false);
 
 let authSubscription: Subscription | null = null;
 
+/**
+ * Strict Email Address Validation (Format + Valid TLD Check)
+ */
+const isValidEmail = (val: string): boolean => {
+  const cleanEmail = val.trim();
+  // Standard RFC 5322 regex + TLD requirement (e.g. .com, .edu, .ph)
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  return emailRegex.test(cleanEmail);
+};
+
 const switchTab = (tab: 'login' | 'signup' | 'forgot' | 'updatePassword') => {
   activeTab.value = tab;
   errorMessage.value = '';
@@ -113,6 +123,11 @@ const handleLogin = async () => {
     return;
   }
 
+  if (!isValidEmail(email.value)) {
+    errorMessage.value = 'Please enter a valid email address (e.g. user@domain.com).';
+    return;
+  }
+
   loading.value = true;
   try {
     await authStore.signIn(email.value.trim(), password.value);
@@ -132,6 +147,12 @@ const handleSignup = async () => {
 
   if (!email.value.trim() || !password.value || !firstName.value.trim() || !lastName.value.trim()) {
     errorMessage.value = 'Please fill in all required fields.';
+    return;
+  }
+
+  // Strict Email Validation
+  if (!isValidEmail(email.value)) {
+    errorMessage.value = 'Please enter a valid and existing email address (e.g. user@domain.com).';
     return;
   }
 
@@ -168,7 +189,6 @@ const handleSignup = async () => {
 const handleGoogleAuth = async () => {
   errorMessage.value = '';
   try {
-    // Dynamic callback base sa kasalukuyang domain (gumagana sa localhost at Vercel)
     const redirectUrl = `${window.location.origin}/auth`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -193,6 +213,11 @@ const handleForgotPassword = async () => {
 
   if (!email.value.trim()) {
     errorMessage.value = 'Please enter your email address.';
+    return;
+  }
+
+  if (!isValidEmail(email.value)) {
+    errorMessage.value = 'Please enter a valid email address (e.g. user@domain.com).';
     return;
   }
 
@@ -388,6 +413,7 @@ const confirmGoogleRole = async () => {
             <button type="submit" class="primary-button login-button" :disabled="loading || authStore.loading">
               {{ (loading || authStore.loading) ? 'WAIT...' : 'LOGIN' }}
             </button>
+
             <!-- Divider -->
             <div class="or-divider" aria-label="or">
               <span></span><small>OR</small><span></span>
@@ -1044,6 +1070,39 @@ const confirmGoogleRole = async () => {
 
 .input-line:focus-within {
   border-bottom-color: var(--tx-cyan);
+}
+
+/* CYBER-GLASS DROPDOWN SELECT STYLING & PERFECT ARROW ALIGNMENT */
+select.trainext-select-glass,
+.auth-page select {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  -moz-appearance: none !important;
+  background-color: rgba(5, 8, 16, 0.92) !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2300d9ff'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2.2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 14px center !important;
+  background-size: 14px 14px !important;
+  padding-right: 36px !important;
+  border: 1px solid rgba(0, 217, 255, 0.35) !important;
+  border-radius: 9999px !important;
+  color: #f8fbff !important;
+  outline: none !important;
+  font-family: "Aileron", sans-serif !important;
+  transition: all 180ms ease !important;
+}
+
+select.trainext-select-glass:focus,
+.auth-page select:focus {
+  border-color: #00d9ff !important;
+  box-shadow: 0 0 12px rgba(0, 217, 255, 0.4) !important;
+}
+
+select.trainext-select-glass option,
+.auth-page select option {
+  background-color: #070b14 !important;
+  color: #f8fbff !important;
+  padding: 10px !important;
 }
 
 .visibility-button {

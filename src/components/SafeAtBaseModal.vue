@@ -2,6 +2,9 @@
 import { ref } from 'vue';
 import { useAttendanceStore } from '@/stores/attendance';
 
+/**
+ * Component Props & Emits Definition
+ */
 const props = defineProps<{
   isOpen: boolean;
   logId: string;
@@ -13,11 +16,21 @@ const emit = defineEmits<{
   (e: 'confirmed'): void;
 }>();
 
+/**
+ * Service & Store Instances
+ */
 const attendanceStore = useAttendanceStore();
+
+/**
+ * UI State & Asynchronous Controls
+ */
 const loading = ref(false);
 const errorMessage = ref('');
 const transitNotes = ref('');
 
+/**
+ * Confirms Trainee Arrival at Safe Base Quarters with Optional GPS Location Verification
+ */
 const confirmSafeAtBase = async () => {
   if (!props.logId) return;
 
@@ -40,11 +53,11 @@ const confirmSafeAtBase = async () => {
         lat = position.coords.latitude;
         lng = position.coords.longitude;
       } catch (geoErr) {
-        console.warn('Could not acquire precise base GPS, proceeding with timestamp only.', geoErr);
+        console.warn('Could not acquire precise base GPS. Proceeding with timestamp verification only.', geoErr);
       }
     }
 
-    // Gamitin ang store method para synchronized ang state at safe ang column payload
+    // Synchronize shift state via Pinia store method with schema resilience
     await attendanceStore.confirmSafeAtBase({
       logId: props.logId,
       internId: props.internId,
@@ -68,9 +81,10 @@ const confirmSafeAtBase = async () => {
     v-if="isOpen" 
     class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm select-none"
   >
+    <!-- MODAL CONTAINER -->
     <div class="w-full max-w-sm trainext-glass-card rounded-[28px] p-6 flex flex-col gap-4 border border-white/20 shadow-2xl">
       
-      <!-- HEADER & ICON -->
+      <!-- MODAL HEADER & ICON -->
       <div class="flex items-center gap-3">
         <div class="w-10 h-10 rounded-full bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center shrink-0">
           <svg class="w-5 h-5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -83,12 +97,12 @@ const confirmSafeAtBase = async () => {
         </div>
       </div>
 
-      <!-- DESCRIPTION -->
+      <!-- DESCRIPTION TEXT -->
       <p class="text-xs text-slate-300 leading-relaxed">
         This marks your shift as officially concluded and confirms to your coordinator and supervisor that you have arrived safely from transit.
       </p>
 
-      <!-- TRANSIT REMARKS (OPTIONAL) -->
+      <!-- TRANSIT REMARKS FIELD (OPTIONAL) -->
       <div class="flex flex-col gap-1">
         <label class="trainext-label">OPTIONAL TRANSIT NOTE</label>
         <input 
@@ -99,12 +113,12 @@ const confirmSafeAtBase = async () => {
         />
       </div>
 
-      <!-- ERROR FEEDBACK -->
+      <!-- ERROR FEEDBACK DISPLAY -->
       <div v-if="errorMessage" class="p-2.5 rounded-xl bg-red-950/60 border border-red-500/40 text-xs text-red-200">
         {{ errorMessage }}
       </div>
 
-      <!-- BUTTON ACTIONS -->
+      <!-- ACTION BUTTONS -->
       <div class="flex items-center justify-end gap-2.5 pt-2 border-t border-white/10">
         <button 
           type="button" 

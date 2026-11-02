@@ -14,20 +14,30 @@ import TraiNextSpinner from '@/components/TraiNextSpinner.vue';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-let supervisorRealtimeChannel: any = null;
-let supervisorMap: L.Map | null = null;
-let supervisorSiteCircle: L.Circle | null = null;
-let supervisorSiteMarker: L.Marker | null = null;
-
+/**
+ * Service & Store Instances
+ */
 const router = useRouter();
 const authStore = useAuthStore();
 const accomplishmentsStore = useAccomplishmentsStore();
 const toast = useToast();
 
-// Active Bottom Navigation Tab ('overview' | 'reports' | 'trainees')
+/**
+ * Global Leaflet Map & Realtime Subscriptions
+ */
+let supervisorRealtimeChannel: any = null;
+let supervisorMap: L.Map | null = null;
+let supervisorSiteCircle: L.Circle | null = null;
+let supervisorSiteMarker: L.Marker | null = null;
+
+/**
+ * Active Navigation Tab State ('overview' | 'reports' | 'trainees')
+ */
 const activeMainTab = ref<'overview' | 'reports' | 'trainees'>('overview');
 
-// Modals State
+/**
+ * UI State & Modal Controls
+ */
 const isProfileSettingsOpen = ref(false);
 const isGeofenceModalOpen = ref(false);
 const isProofViewerOpen = ref(false);
@@ -35,23 +45,34 @@ const showSignOutConfirm = ref(false);
 const isSigningOut = ref(false);
 const isInitialLoading = ref(true);
 
-// State para sa pag-track kung nabisita na ang tabs (notif auto-dismiss)
+/**
+ * Notification Badge Dismissal Tracking Flags
+ */
 const hasViewedReportsTab = ref(false);
 const hasViewedTraineesTab = ref(false);
 
-// Focused Detail Modal para sa Report Review
+/**
+ * Accomplishment Report Review Modal State
+ */
 const selectedReportForReview = ref<any | null>(null);
 const isReportReviewModalOpen = ref(false);
 
-// Focused Modal para sa Mga Reports ng Isang Partikular na Trainee
+/**
+ * Trainee-Specific Accomplishment Modal State
+ */
 const selectedTraineeForReports = ref<any | null>(null);
 const isTraineeReportsModalOpen = ref(false);
 
+/**
+ * Proof Viewer Media State
+ */
 const activeProofUrl = ref<string | null>(null);
 const activeProofType = ref<'image' | 'document' | 'video' | null>(null);
 const activeProofTitle = ref('');
 
-// Data State
+/**
+ * Core Data State
+ */
 const site = ref<CompanySite | null>(null);
 const loadingSite = ref(true);
 const pendingInterns = ref<any[]>([]);
@@ -60,14 +81,20 @@ const modalFeedbackText = ref('');
 const selectedBatchIds = ref<string[]>([]);
 const isBatchProcessing = ref(false);
 
-// Hiwalay na state para sa Approve vs Reject button loading
+/**
+ * Independent Loading State for Report Review Actions
+ */
 const reviewActionState = ref<'approving' | 'rejecting' | null>(null);
 
-// Search & Filter State para sa Reports Tab
+/**
+ * Search & Filter Criteria for Accomplishment Reports Tab
+ */
 const searchQuery = ref('');
 const activeFilter = ref<'all' | 'pending' | 'approved' | 'rejected'>('all');
 
-// Computed Logs & Counts
+/**
+ * Computed Log Collections
+ */
 const allLogs = computed(() => accomplishmentsStore.logs || []);
 
 const pendingReviewLogs = computed(() => {
@@ -76,7 +103,9 @@ const pendingReviewLogs = computed(() => {
 
 const pendingCount = computed(() => pendingReviewLogs.value.length);
 
-// Dismissible Notification Badges Logic
+/**
+ * Dynamic Notification Badge Counters
+ */
 const activeReportsBadgeCount = computed(() => {
   if (hasViewedReportsTab.value) return 0;
   return pendingCount.value;
@@ -87,6 +116,9 @@ const activeTraineesBadgeCount = computed(() => {
   return pendingInterns.value.length;
 });
 
+/**
+ * Tab Navigation Event Listener for Auto-Dismissing Badges
+ */
 watch(activeMainTab, (newTab) => {
   if (newTab === 'reports') {
     hasViewedReportsTab.value = true;
@@ -95,21 +127,27 @@ watch(activeMainTab, (newTab) => {
   }
 });
 
-// Kapag may bagong pumasok na pending report habang wala sa reports tab, ibalik ang badge
+/**
+ * Reactivate Reports Badge on New Submissions
+ */
 watch(pendingCount, (newVal, oldVal) => {
   if (newVal > oldVal && activeMainTab.value !== 'reports') {
     hasViewedReportsTab.value = false;
   }
 });
 
-// Kapag may bagong dumating na intern request habang wala sa trainees tab, ibalik ang badge
+/**
+ * Reactivate Trainees Badge on New Affiliation Requests
+ */
 watch(() => pendingInterns.value.length, (newVal, oldVal) => {
   if (newVal > oldVal && activeMainTab.value !== 'trainees') {
     hasViewedTraineesTab.value = false;
   }
 });
 
-// Filtered Reports (Search + Filter Tab)
+/**
+ * Filtered Accomplishment Reports Feed
+ */
 const filteredLogs = computed(() => {
   let list = allLogs.value;
   if (activeFilter.value !== 'all') {
@@ -126,14 +164,18 @@ const filteredLogs = computed(() => {
   return list;
 });
 
-// Reports ng kasalukuyang piniling Trainee
+/**
+ * Accomplishment Logs Filtered by Selected Trainee
+ */
 const traineeSpecificLogs = computed(() => {
   if (!selectedTraineeForReports.value) return [];
   const targetId = selectedTraineeForReports.value.intern?.id || selectedTraineeForReports.value.id;
   return allLogs.value.filter((l: any) => (l.intern_id === targetId || l.intern?.id === targetId));
 });
 
-// Render Leaflet Geofence Map sa Overview Tab
+/**
+ * Renders and Updates Leaflet Geofence Mini-Map
+ */
 const renderSupervisorGeofenceMap = () => {
   if (activeMainTab.value !== 'overview' || !site.value?.latitude || !site.value?.longitude) return;
 
@@ -192,7 +234,9 @@ watch(
   { deep: true }
 );
 
-// Fetch Supervisor's Geofence Site
+/**
+ * Fetches Supervisor's Company Site Geofence Config
+ */
 const fetchSite = async () => {
   if (!authStore.user?.id) return;
   loadingSite.value = true;
@@ -215,7 +259,9 @@ const fetchSite = async () => {
   }
 };
 
-// Fetch Pending and Approved Interns
+/**
+ * Fetches Trainee Affiliation Requests (Pending and Approved)
+ */
 const fetchInterns = async () => {
   if (!authStore.user?.id) return;
   try {
@@ -243,7 +289,9 @@ const fetchInterns = async () => {
   }
 };
 
-// Handle Intern Link Approval/Rejection
+/**
+ * Responds to Trainee Affiliation Request
+ */
 const respondToIntern = async (linkId: string, status: 'approved' | 'rejected') => {
   try {
     const { error } = await supabase
@@ -264,20 +312,26 @@ const respondToIntern = async (linkId: string, status: 'approved' | 'rejected') 
   }
 };
 
-// Open Single Report Review Modal
+/**
+ * Opens Report Review Modal for Individual Report
+ */
 const openReportReview = (log: any) => {
   selectedReportForReview.value = log;
   modalFeedbackText.value = log.feedback || '';
   isReportReviewModalOpen.value = true;
 };
 
-// Open Trainee Reports Modal
+/**
+ * Opens Trainee Submissions Modal
+ */
 const openTraineeReports = (trainee: any) => {
   selectedTraineeForReports.value = trainee;
   isTraineeReportsModalOpen.value = true;
 };
 
-// Submit Review (Approve / Reject) sa Modal nang may partikular na action state
+/**
+ * Submits Report Review Decision (Approve or Reject)
+ */
 const handleReview = async (status: 'approved' | 'rejected') => {
   if (!selectedReportForReview.value) return;
   const logId = selectedReportForReview.value.id;
@@ -323,7 +377,9 @@ const handleReview = async (status: 'approved' | 'rejected') => {
   }
 };
 
-// Batch Approve
+/**
+ * Batch Selection Controls for Pending Reports
+ */
 const toggleSelectAll = () => {
   const pendingIds = pendingReviewLogs.value.map((l: any) => l.id);
   if (selectedBatchIds.value.length === pendingIds.length) {
@@ -333,6 +389,9 @@ const toggleSelectAll = () => {
   }
 };
 
+/**
+ * Processes Batch Approval for Selected Pending Reports
+ */
 const handleBatchApprove = async () => {
   if (selectedBatchIds.value.length === 0) return;
   isBatchProcessing.value = true;
@@ -373,7 +432,9 @@ const handleBatchApprove = async () => {
   }
 };
 
-// Clean Sign Out Handler
+/**
+ * Handles Session Sign Out
+ */
 const handleSignOut = async () => {
   showSignOutConfirm.value = false;
   isSigningOut.value = true;
@@ -388,7 +449,9 @@ const handleSignOut = async () => {
   }
 };
 
-// Inspect Media
+/**
+ * Opens Proof Attachment Modal
+ */
 const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: string) => {
   activeProofUrl.value = url;
   activeProofType.value = type;
@@ -396,6 +459,9 @@ const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: 
   isProofViewerOpen.value = true;
 };
 
+/**
+ * Master Data Refetch Utility
+ */
 const loadAllData = async () => {
   if (!authStore.user?.id) return;
   await Promise.allSettled([
@@ -405,6 +471,9 @@ const loadAllData = async () => {
   ]);
 };
 
+/**
+ * Lifecycle Hook: Mounting & Realtime Initialization
+ */
 onMounted(async () => {
   isInitialLoading.value = true;
   try {
@@ -414,6 +483,13 @@ onMounted(async () => {
       return;
     }
     await loadAllData();
+
+    // Auto-dismiss badge if starting directly on a specific tab
+    if (activeMainTab.value === 'reports') {
+      hasViewedReportsTab.value = true;
+    } else if (activeMainTab.value === 'trainees') {
+      hasViewedTraineesTab.value = true;
+    }
 
     if (authStore.user?.id) {
       supervisorRealtimeChannel = supabase
@@ -441,6 +517,9 @@ onMounted(async () => {
   }
 });
 
+/**
+ * Lifecycle Hook: Unmounting & Cleanup
+ */
 onUnmounted(() => {
   if (supervisorRealtimeChannel) {
     supabase.removeChannel(supervisorRealtimeChannel);
@@ -812,7 +891,7 @@ onUnmounted(() => {
       </footer>
     </div>
 
-    <!-- ================= FIXED BOTTOM NAV (ICON-ONLY + AUTO-DISMISS NOTIF BADGE) ================= -->
+    <!-- ================= FIXED BOTTOM NAV ================= -->
     <nav class="fixed-bottom-bar" aria-label="Supervisor Bottom Navigation">
       <div class="bottom-bar-inner">
         <!-- TAB 1: OVERVIEW -->
@@ -831,7 +910,7 @@ onUnmounted(() => {
           <span v-if="activeMainTab === 'overview'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 2: REPORTS (MAWAWALA ANG BADGE KAPAG NAPINDOT NA) -->
+        <!-- TAB 2: REPORTS -->
         <button 
           type="button" 
           @click="activeMainTab = 'reports'; hasViewedReportsTab = true;"
@@ -841,7 +920,7 @@ onUnmounted(() => {
         >
           <div class="relative flex items-center justify-center">
             <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 01-2-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
             <span v-if="activeReportsBadgeCount > 0" class="nav-badge-count">
               {{ activeReportsBadgeCount > 99 ? '99+' : activeReportsBadgeCount }}
@@ -850,7 +929,7 @@ onUnmounted(() => {
           <span v-if="activeMainTab === 'reports'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 3: TRAINEES (MAWAWALA ANG BADGE KAPAG NAPINDOT NA) -->
+        <!-- TAB 3: TRAINEES -->
         <button 
           type="button" 
           @click="activeMainTab = 'trainees'; hasViewedTraineesTab = true;"
@@ -1536,7 +1615,6 @@ onUnmounted(() => {
   transform: translateY(-2px);
 }
 
-/* NOTIFICATION BADGE NA MAY BILANG */
 .nav-badge-count {
   position: absolute;
   top: -6px;
@@ -1560,7 +1638,6 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
-/* ACTIVE TAB INDICATOR SA ILALIM */
 .active-dot {
   position: absolute;
   bottom: 6px;

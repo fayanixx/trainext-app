@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/auth';
+import { useAccomplishmentsStore } from '@/stores/accomplishments';
 import ProfileSettingsModal from '@/components/ProfileSettingsModal.vue';
 import ReportPreviewModal from '@/components/ReportPreviewModal.vue';
 import TraiNextSpinner from '@/components/TraiNextSpinner.vue';
@@ -14,43 +15,72 @@ import {
   type IndividualLogRecord 
 } from '@/lib/exportUtils';
 
+/**
+ * Toast, Router & Store Services Initialization
+ */
 const toast = useToast();
-let coordinatorRealtimeChannel: any = null;
 const router = useRouter();
 const authStore = useAuthStore();
+const accomplishmentsStore = useAccomplishmentsStore();
 
-// Active Bottom Tab ('overview' | 'directory' | 'performance')
+/**
+ * Global Realtime Channel Subscription Pointer
+ */
+let coordinatorRealtimeChannel: any = null;
+
+/**
+ * Active Navigation Tab State ('overview' | 'directory' | 'performance')
+ */
 const activeMainTab = ref<'overview' | 'directory' | 'performance'>('overview');
 
-// UI State
+/**
+ * UI State Management Controls
+ */
 const isProfileSettingsOpen = ref(false);
 const showSignOutConfirm = ref(false);
 const isSigningOut = ref(false);
 const isInitialLoading = ref(true);
 
-// State para sa pag-track kung nabisita na ang tabs (notif auto-dismiss)
-const hasViewedDirectoryTab = ref(false);
-const hasViewedPerformanceTab = ref(false);
+/**
+ * Persistent Notification Badge State via LocalStorage
+ */
+const STORAGE_KEY_DIR = 'trainext_coord_viewed_directory';
+const STORAGE_KEY_PERF_COUNT = 'trainext_coord_last_seen_perf_count';
 
-// Search & Filter State para sa Directory
+const hasViewedDirectoryTab = ref(localStorage.getItem(STORAGE_KEY_DIR) === 'true');
+const lastSeenPerformanceReportCount = ref<number>(
+  Number(localStorage.getItem(STORAGE_KEY_PERF_COUNT) || 0)
+);
+
+/**
+ * Directory Tab Search & Filter Criteria
+ */
 const directorySearch = ref('');
 const directoryStatusFilter = ref<'all' | 'on_duty' | 'in_transit' | 'safe_at_base' | 'idle' | 'completed_ojt'>('all');
 
-// Search & Filter State para sa Performance / Accomplishments Tab
+/**
+ * Performance & Accomplishments Tab Filter Criteria
+ */
 const performanceSearch = ref('');
 const reportStatusFilter = ref<'all' | 'approved' | 'rejected'>('all');
 
-// Document Preview State (DTR Audit)
+/**
+ * Document Preview & Audit Export State
+ */
 const isReportPreviewOpen = ref(false);
 const previewHtml = ref('');
 const previewDocTitle = ref('');
 const isExportingIndividual = ref<string | null>(null);
 
-// Trainee Specific Reports Modal State
+/**
+ * Trainee Accomplishment Review Modal Controls
+ */
 const isTraineeReportsModalOpen = ref(false);
 const selectedTraineeForReview = ref<InternRecord | null>(null);
 
-// Master Intern Record Interface
+/**
+ * Master Intern Record Data Structure
+ */
 interface InternRecord {
   id: string;
   full_name: string;
@@ -70,6 +100,9 @@ interface InternRecord {
   rejected_reports_count: number;
 }
 
+/**
+ * Accomplishment Report Structure
+ */
 interface AccomplishmentReportItem {
   id: string;
   intern_id: string;
@@ -83,51 +116,63 @@ interface AccomplishmentReportItem {
 const internsList = ref<InternRecord[]>([]);
 const allReviewedReports = ref<AccomplishmentReportItem[]>([]);
 
-// Metrics Calculation
+/**
+ * Computed Real-Time Cohort Metrics
+ */
 const totalInterns = computed(() => internsList.value.length);
 const onDutyCount = computed(() => internsList.value.filter((i) => i.today_status === 'on_duty').length);
 const inTransitCount = computed(() => internsList.value.filter((i) => i.today_status === 'in_transit').length);
 const safeCount = computed(() => internsList.value.filter((i) => i.today_status === 'safe_at_base').length);
 const completedOjtCount = computed(() => internsList.value.filter((i) => i.is_ojt_completed).length);
 
-// Safety Lists para sa Home / Overview Tab
+/**
+ * Active Transit & Safety Lists for Overview Dashboard
+ */
 const inTransitInterns = computed(() => internsList.value.filter((i) => i.today_status === 'in_transit'));
 const safeAtBaseInterns = computed(() => internsList.value.filter((i) => i.today_status === 'safe_at_base'));
 
-// Dismissible Notification Badges Logic
+/**
+ * Dynamic Notification Badge Counters with Persistence Support
+ */
 const activeInTransitBadgeCount = computed(() => {
   if (hasViewedDirectoryTab.value) return 0;
   return inTransitCount.value;
 });
 
 const activeReportsBadgeCount = computed(() => {
-  if (hasViewedPerformanceTab.value) return 0;
-  return allReviewedReports.value.length;
+  const currentCount = allReviewedReports.value.length;
+  // Kukuha lang ng badge count kung may BAGO kaysa sa huling nakitang count
+  const unreadDiff = currentCount - lastSeenPerformanceReportCount.value;
+  return unreadDiff > 0 ? unreadDiff : 0;
 });
 
+/**
+ * Tab Navigation Event Listener for Auto-Dismissing & Persisting Badges
+ */
 watch(activeMainTab, (newTab) => {
   if (newTab === 'directory') {
     hasViewedDirectoryTab.value = true;
+    localStorage.setItem(STORAGE_KEY_DIR, 'true');
   } else if (newTab === 'performance') {
-    hasViewedPerformanceTab.value = true;
+    lastSeenPerformanceReportCount.value = allReviewedReports.value.length;
+    localStorage.setItem(STORAGE_KEY_PERF_COUNT, String(allReviewedReports.value.length));
+    accomplishmentsStore.markAllAsRead();
   }
 });
 
-// Kapag may bagong pumasok na trainee na nag-transit habang wala sa directory, ibalik ang badge
+/**
+ * Reactivate Directory Badge on New In-Transit Entries
+ */
 watch(inTransitCount, (newVal, oldVal) => {
   if (newVal > oldVal && activeMainTab.value !== 'directory') {
     hasViewedDirectoryTab.value = false;
+    localStorage.setItem(STORAGE_KEY_DIR, 'false');
   }
 });
 
-// Kapag may bagong na-review na reports habang wala sa performance tab, ibalik ang badge
-watch(() => allReviewedReports.value.length, (newVal, oldVal) => {
-  if (newVal > oldVal && activeMainTab.value !== 'performance') {
-    hasViewedPerformanceTab.value = false;
-  }
-});
-
-// Cohort Cumulative Target Calculation
+/**
+ * Cohort Cumulative Practicum Hours Calculations (Target: 486 Hours)
+ */
 const cohortTargetHours = computed(() => totalInterns.value * 486);
 const cohortRenderedHours = computed(() => {
   return internsList.value.reduce((acc, curr) => acc + (curr.total_hours || 0), 0);
@@ -138,7 +183,9 @@ const cohortProgressPercentage = computed(() => {
   return Math.min(Math.round(pct), 100);
 });
 
-// Filtered Interns (Directory Tab)
+/**
+ * Filtered Trainee Directory List
+ */
 const filteredDirectoryInterns = computed(() => {
   return internsList.value.filter((intern) => {
     const query = directorySearch.value.toLowerCase().trim();
@@ -160,7 +207,9 @@ const filteredDirectoryInterns = computed(() => {
   });
 });
 
-// Filtered Trainees sa Performance / Accomplishments Tab
+/**
+ * Filtered Trainee Performance List
+ */
 const filteredPerformanceInterns = computed(() => {
   const query = performanceSearch.value.toLowerCase().trim();
   if (!query) return internsList.value;
@@ -171,7 +220,9 @@ const filteredPerformanceInterns = computed(() => {
   );
 });
 
-// Mga Reports ng Kasalukuyang Piniling Trainee (Approved + Rejected)
+/**
+ * Filtered Accomplishment Reports for Selected Trainee
+ */
 const currentTraineeReports = computed(() => {
   if (!selectedTraineeForReview.value) return [];
   let reports = allReviewedReports.value.filter((r) => r.intern_id === selectedTraineeForReview.value!.id);
@@ -181,12 +232,13 @@ const currentTraineeReports = computed(() => {
   return reports;
 });
 
-// Fetch Master Coordinator Data
+/**
+ * Fetches and Aggregates Master Data from Supabase
+ */
 const fetchMasterData = async () => {
   try {
     const today = new Date().toISOString().split('T')[0];
 
-    // 1. Kunin ang lahat ng interns
     const { data: interns, error: internErr } = await supabase
       .from('profiles')
       .select('id, full_name, email, contact_number, supervisor_id, company_name')
@@ -202,7 +254,6 @@ const fetchMasterData = async () => {
 
     const internIds = interns.map((i: any) => i.id);
 
-    // 2. Lookup Tables at Accomplishment Reports (Approved AT Rejected)
     const [linksRes, sitesRes, supervisorsRes, attendanceRes, reportsRes] = await Promise.all([
       supabase
         .from('intern_supervisor_links')
@@ -233,10 +284,15 @@ const fetchMasterData = async () => {
     const attendance = attendanceRes.data || [];
     allReviewedReports.value = (reportsRes.data as AccomplishmentReportItem[]) || [];
 
+    // Kung nasa Performance Tab na ang user habang nagfe-fetch, i-update ang last seen count
+    if (activeMainTab.value === 'performance') {
+      lastSeenPerformanceReportCount.value = allReviewedReports.value.length;
+      localStorage.setItem(STORAGE_KEY_PERF_COUNT, String(allReviewedReports.value.length));
+    }
+
     const supervisorMap = new Map(supervisors.map((s: any) => [s.id, s.full_name]));
     const siteMap = new Map(sites.map((s: any) => [s.supervisor_id, s.company_name]));
 
-    // 3. Pagsamahin ang records
     internsList.value = interns.map((intern: any) => {
       const userLinks = links.filter((l: any) => l.intern_id === intern.id);
       const approvedLink = userLinks.find((l: any) => l.status === 'approved');
@@ -291,11 +347,14 @@ const fetchMasterData = async () => {
     });
   } catch (err: any) {
     console.error('Failed to load coordinator data:', err.message);
-  } finally {
+  } flex: {
     isInitialLoading.value = false;
   }
 };
 
+/**
+ * Handles Session Sign Out
+ */
 const handleSignOut = async () => {
   showSignOutConfirm.value = false;
   isSigningOut.value = true;
@@ -310,14 +369,18 @@ const handleSignOut = async () => {
   }
 };
 
-// Open Trainee Reports Drawer
+/**
+ * Opens Trainee Accomplishment Audit Drawer
+ */
 const openTraineeReports = (intern: InternRecord) => {
   selectedTraineeForReview.value = intern;
   reportStatusFilter.value = 'all';
   isTraineeReportsModalOpen.value = true;
 };
 
-// Master CSV Export
+/**
+ * Exports Master Cohort Summary to CSV
+ */
 const handleMasterCSVExport = () => {
   if (!internsList.value || internsList.value.length === 0) {
     toast.warning('No trainee records available to export.', 'EXPORT EMPTY');
@@ -342,7 +405,9 @@ const handleMasterCSVExport = () => {
   toast.success('Master cohort summary exported to CSV.', 'EXPORT COMPLETE');
 };
 
-// Master PDF Export
+/**
+ * Exports Master Cohort Summary Document Preview
+ */
 const handleMasterPDFExport = () => {
   if (!internsList.value || internsList.value.length === 0) {
     toast.warning('No trainee records available to preview.', 'EXPORT EMPTY');
@@ -367,7 +432,9 @@ const handleMasterPDFExport = () => {
   isReportPreviewOpen.value = true;
 };
 
-// Individual DTR Audit Export
+/**
+ * Generates Individual Trainee DTR Audit File
+ */
 const handleIndividualExport = async (intern: InternRecord) => {
   isExportingIndividual.value = intern.id;
   try {
@@ -398,6 +465,9 @@ const handleIndividualExport = async (intern: InternRecord) => {
   }
 };
 
+/**
+ * Lifecycle Hook: Mounting & Realtime Subscriptions Initialization
+ */
 onMounted(async () => {
   isInitialLoading.value = true;
   try {
@@ -407,6 +477,14 @@ onMounted(async () => {
       return;
     }
     await fetchMasterData();
+
+    if (activeMainTab.value === 'directory') {
+      hasViewedDirectoryTab.value = true;
+      localStorage.setItem(STORAGE_KEY_DIR, 'true');
+    } else if (activeMainTab.value === 'performance') {
+      lastSeenPerformanceReportCount.value = allReviewedReports.value.length;
+      localStorage.setItem(STORAGE_KEY_PERF_COUNT, String(allReviewedReports.value.length));
+    }
 
     coordinatorRealtimeChannel = supabase
       .channel('coordinator-global-sync')
@@ -420,6 +498,9 @@ onMounted(async () => {
   }
 });
 
+/**
+ * Lifecycle Hook: Unmounting & Cleanup
+ */
 onUnmounted(() => {
   if (coordinatorRealtimeChannel) {
     supabase.removeChannel(coordinatorRealtimeChannel);
@@ -480,7 +561,7 @@ onUnmounted(() => {
       
       <!-- ================= TAB 1: OVERVIEW ================= -->
       <div v-show="activeMainTab === 'overview'" class="tab-pane-container">
-        <!-- COHORT PROGRESS PROGRESS BAR -->
+        <!-- COHORT PRACTICUM PROGRESS BAR -->
         <section class="trainext-glass-card p-4 sm:p-5 flex flex-col gap-2.5">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -621,7 +702,7 @@ onUnmounted(() => {
                     </span>
                   </div>
 
-                  <!-- DIRECT COMMENT / TRANSIT NOTE -->
+                  <!-- TRANSIT REMARKS NOTE -->
                   <div 
                     v-if="intern.transit_notes" 
                     class="p-2 rounded-lg bg-emerald-950/40 border border-emerald-500/20 text-emerald-200 text-[10.5px] leading-relaxed flex items-start gap-1.5"
@@ -735,7 +816,7 @@ onUnmounted(() => {
                     class="trainext-chip shrink-0 text-[9.5px]"
                     :class="{
                       'chip-cyan': intern.today_status === 'on_duty',
-                      'chip-amber': intern.today_status === 'in_transit',
+                      'chip-[#f59e0b]': intern.today_status === 'in_transit',
                       'chip-emerald': intern.today_status === 'safe_at_base',
                       'border border-white/15 text-[#858994]': intern.today_status === 'idle'
                     }"
@@ -782,7 +863,7 @@ onUnmounted(() => {
         </section>
       </div>
 
-      <!-- ================= TAB 3: REVIEWED REPORTS & PERFORMANCE (APPROVED + REJECTED) ================= -->
+      <!-- ================= TAB 3: REVIEWED REPORTS & PERFORMANCE ================= -->
       <div v-show="activeMainTab === 'performance'" class="tab-pane-container">
         <section class="trainext-glass-card flex flex-col gap-4 p-4 sm:p-5">
           <div>
@@ -823,7 +904,7 @@ onUnmounted(() => {
               class="report-item-card group cursor-pointer"
             >
               <div class="flex items-center gap-3 min-w-0 flex-1">
-                <!-- AVATAR LETTER -->
+                <!-- AVATAR INITIAL -->
                 <div class="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-[#00d9ff] font-bold shrink-0">
                   {{ (intern.full_name || 'T')[0] }}
                 </div>
@@ -857,7 +938,7 @@ onUnmounted(() => {
       </footer>
     </div>
 
-    <!-- ================= FIXED BOTTOM NAV (ICON-ONLY + AUTO-DISMISS NOTIF BADGE) ================= -->
+    <!-- ================= FIXED BOTTOM NAVIGATION ================= -->
     <nav class="fixed-bottom-bar" aria-label="Coordinator Bottom Navigation">
       <div class="bottom-bar-inner">
         <!-- TAB 1: OVERVIEW -->
@@ -876,17 +957,17 @@ onUnmounted(() => {
           <span v-if="activeMainTab === 'overview'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 2: DIRECTORY (MAWAWALA ANG BADGE KAPAG NAPINDOT NA) -->
+        <!-- TAB 2: DIRECTORY -->
         <button 
           type="button" 
-          @click="activeMainTab = 'directory'; hasViewedDirectoryTab = true;"
+          @click="activeMainTab = 'directory'"
           class="bottom-nav-item"
           :class="{ active: activeMainTab === 'directory' }"
           aria-label="Live Directory"
         >
           <div class="relative flex items-center justify-center">
             <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20H2v-2a3 3 0 015.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
             <span v-if="activeInTransitBadgeCount > 0" class="nav-badge-count">
               {{ activeInTransitBadgeCount > 99 ? '99+' : activeInTransitBadgeCount }}
@@ -895,10 +976,10 @@ onUnmounted(() => {
           <span v-if="activeMainTab === 'directory'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 3: REVIEWED REPORTS & PERFORMANCE (MAWAWALA ANG BADGE KAPAG NAPINDOT NA) -->
+        <!-- TAB 3: REVIEWED REPORTS & PERFORMANCE -->
         <button 
           type="button" 
-          @click="activeMainTab = 'performance'; hasViewedPerformanceTab = true;"
+          @click="activeMainTab = 'performance'"
           class="bottom-nav-item"
           :class="{ active: activeMainTab === 'performance' }"
           aria-label="Trainee Accomplishments"
@@ -916,13 +997,13 @@ onUnmounted(() => {
       </div>
     </nav>
 
-    <!-- ================= PASILIP MODAL: AUDIT REPORTS BY TRAINEE ================= -->
+    <!-- ================= AUDIT REPORTS BY TRAINEE MODAL ================= -->
     <div 
       v-if="isTraineeReportsModalOpen && selectedTraineeForReview" 
       class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-md select-none overflow-y-auto"
     >
       <div class="w-full max-w-[620px] my-auto rounded-[24px] bg-[#050811]/95 border border-white/15 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-        <!-- HEADER -->
+        <!-- MODAL HEADER -->
         <header class="px-5 sm:px-6 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.015]">
           <div class="min-w-0">
             <p class="text-sm sm:text-base font-bold text-white truncate font-['Aileron',sans-serif]">
@@ -941,7 +1022,7 @@ onUnmounted(() => {
           </button>
         </header>
 
-        <!-- STATUS TOGGLE FILTER PILLS SA LOOB NG MODAL -->
+        <!-- STATUS TOGGLE FILTER PILLS -->
         <div class="px-5 sm:px-6 pt-3 flex items-center gap-2 border-b border-white/5 pb-2">
           <button
             type="button"
@@ -969,7 +1050,7 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- STREAMLINED FEED (DATE, TITLE, DESC, STATUS, FEEDBACK) -->
+        <!-- REPORT AUDIT FEED -->
         <div class="p-5 sm:p-6 flex flex-col gap-3.5 overflow-y-auto max-h-[calc(80vh-120px)]">
           <div v-if="currentTraineeReports.length === 0" class="p-8 text-center text-xs text-[#858994] font-mono">
             No accomplishment reports found under '{{ reportStatusFilter }}' filter for this trainee.

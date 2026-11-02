@@ -3,6 +3,9 @@ import { ref, watch } from 'vue';
 import { supabase } from '@/lib/supabase';
 import { useToast } from '@/composables/useToast';
 
+/**
+ * Component Props & Emits Definition
+ */
 const props = defineProps<{
   isOpen: boolean;
   log: any | null;
@@ -17,25 +20,35 @@ const emit = defineEmits<{
 
 const toast = useToast();
 
-// Mode States
+/**
+ * Inspection vs Edit Mode Controls
+ */
 const isEditing = ref(false);
 const isSaving = ref(false);
 const errorMessage = ref('');
 
-// Editable Form Fields
+/**
+ * Editable Form Fields State
+ */
 const editTitle = ref('');
 const editDescription = ref('');
 const editReportDate = ref('');
 const editVideoUrl = ref('');
 
-// Additional Attachments
+/**
+ * Additional Attachment Files State
+ */
 const additionalImageFiles = ref<File[]>([]);
 const additionalDocFiles = ref<File[]>([]);
 
-// In-App Document Preview Modal State
+/**
+ * In-App Document Preview Modal State
+ */
 const previewDocUrl = ref<string | null>(null);
 
-// Synchronize fields when modal opens
+/**
+ * Watcher: Synchronize Fields & Reset View Mode When Modal Opens
+ */
 watch(
   () => [props.isOpen, props.log],
   ([open]) => {
@@ -55,6 +68,9 @@ watch(
   { immediate: true }
 );
 
+/**
+ * Additional Photo Attachments Handler
+ */
 const handleAdditionalImageChange = (e: Event) => {
   const target = e.target as HTMLInputElement;
   if (target.files) {
@@ -62,6 +78,9 @@ const handleAdditionalImageChange = (e: Event) => {
   }
 };
 
+/**
+ * Additional Document Attachments Handler
+ */
 const handleAdditionalDocChange = (e: Event) => {
   const target = e.target as HTMLInputElement;
   if (target.files) {
@@ -69,6 +88,9 @@ const handleAdditionalDocChange = (e: Event) => {
   }
 };
 
+/**
+ * Uploads Newly Appended Proof Attachments to Supabase Storage Bucket
+ */
 const uploadFilesToBucket = async (files: File[], folder: string): Promise<string[]> => {
   const urls: string[] = [];
   for (const file of files) {
@@ -86,6 +108,9 @@ const uploadFilesToBucket = async (files: File[], folder: string): Promise<strin
   return urls;
 };
 
+/**
+ * Persists Edited Accomplishment Report Changes
+ */
 const handleSaveChanges = async () => {
   if (!editTitle.value.trim() || !editDescription.value.trim()) {
     errorMessage.value = 'Title and description cannot be empty.';
@@ -132,6 +157,9 @@ const handleSaveChanges = async () => {
   }
 };
 
+/**
+ * Opens In-App Document Frame Preview
+ */
 const openDocInAppPreview = (url: string) => {
   previewDocUrl.value = url;
 };
@@ -142,10 +170,10 @@ const openDocInAppPreview = (url: string) => {
     v-if="isOpen && log" 
     class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-md select-none overflow-y-auto"
   >
-    <!-- MODAL CONTAINER (DEEP CYBER-GLASS CARD) -->
+    <!-- MODAL CONTAINER -->
     <div class="w-full max-w-[560px] my-auto rounded-[24px] bg-[#050811]/95 border border-white/15 shadow-[0_10px_40px_rgba(0,0,0,0.8),0_0_30px_rgba(0,217,255,0.08)] backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
       
-      <!-- MODAL TOP BAR (NO TEXT WRAP / ONE LINE HEADER) -->
+      <!-- MODAL TOP BAR -->
       <header class="px-5 sm:px-6 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.015]">
         <div class="flex items-center gap-3 min-w-0">
           <div class="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-[#00d9ff] shrink-0 shadow-[0_0_12px_rgba(0,217,255,0.2)]">
@@ -163,22 +191,22 @@ const openDocInAppPreview = (url: string) => {
           </div>
         </div>
         <div class="flex items-center gap-2 shrink-0">
-            <!-- EDIT TOGGLE BUTTON -->
-            <button
+          <!-- EDIT TOGGLE BUTTON -->
+          <button
             v-if="canEdit && log.status === 'pending' && !isEditing"
             type="button"
             @click="isEditing = true"
             class="edit-pill-btn"
-            >
+          >
             <svg class="w-3.5 h-3.5 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
             </svg>
             <span>Edit</span>
-            </button>
+          </button>
         </div>
       </header>
 
-      <!-- ERROR FEEDBACK -->
+      <!-- ERROR FEEDBACK DISPLAY -->
       <div v-if="errorMessage" class="mx-5 sm:mx-6 mt-4 p-3 rounded-xl bg-rose-950/60 border border-rose-500/40 text-[11px] text-rose-200 flex items-center gap-2">
         <svg class="w-4 h-4 text-rose-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <circle cx="12" cy="12" r="10" stroke-width="2" />
@@ -230,7 +258,7 @@ const openDocInAppPreview = (url: string) => {
           </div>
         </div>
 
-        <!-- DYNAMIC SUPERVISOR FEEDBACK (GREEN IF APPROVED, RED IF REJECTED) -->
+        <!-- DYNAMIC SUPERVISOR FEEDBACK -->
         <div 
           v-if="log.feedback"
           class="p-3.5 rounded-xl border flex flex-col gap-1 animate-in fade-in duration-200"
@@ -269,7 +297,7 @@ const openDocInAppPreview = (url: string) => {
             </div>
           </div>
 
-        <!-- Document Attachments Strip -->
+          <!-- Document Attachments Strip -->
           <div v-if="log.proof_documents?.length" class="flex flex-col gap-1.5 pt-1">
             <span class="text-[9.5px] font-mono text-slate-400">Attached Documents:</span>
             <div class="flex flex-col gap-1.5">
@@ -318,6 +346,7 @@ const openDocInAppPreview = (url: string) => {
               </div>
             </div>
           </div>
+
           <!-- Video Link -->
           <div v-if="log.video_url" class="pt-1">
             <span class="text-[9.5px] font-mono text-slate-400 block mb-1">Demonstration Link:</span>
@@ -361,13 +390,13 @@ const openDocInAppPreview = (url: string) => {
 
         <!-- FOOTER CLOSE -->
         <footer class="flex items-center justify-end pt-4 border-t border-white/10 mt-1">
-        <button 
-        type="button" 
-        @click="emit('close')"
-        class="close-pill-btn"
-        >
-        Close Details
-        </button>
+          <button 
+            type="button" 
+            @click="emit('close')"
+            class="close-pill-btn"
+          >
+            Close Details
+          </button>
         </footer>
 
       </div>
@@ -494,13 +523,13 @@ const openDocInAppPreview = (url: string) => {
   justify-content: center !important;
   width: 30px !important;
   height: 30px !important;
-  border-radius: 9999px !important; /* Ganap na round pill */
+  border-radius: 9999px !important;
   transition: all 160ms ease !important;
   cursor: pointer !important;
   user-select: none !important;
 }
 
-/* Preview Icon Style */
+/* PREVIEW BUTTON STYLING */
 .preview-btn {
   background: rgba(0, 217, 255, 0.1) !important;
   border: 1px solid rgba(0, 217, 255, 0.45) !important;
@@ -515,7 +544,7 @@ const openDocInAppPreview = (url: string) => {
   transform: translateY(-1px) !important;
 }
 
-/* Download Icon Style */
+/* DOWNLOAD BUTTON STYLING */
 .download-btn {
   background: rgba(255, 255, 255, 0.04) !important;
   border: 1px solid rgba(255, 255, 255, 0.18) !important;
@@ -529,7 +558,7 @@ const openDocInAppPreview = (url: string) => {
   transform: translateY(-1px) !important;
 }
 
-/* Close Preview Icon Style */
+/* CLOSE PREVIEW BUTTON STYLING */
 .close-preview-btn {
   width: 26px !important;
   height: 26px !important;
@@ -548,6 +577,7 @@ const openDocInAppPreview = (url: string) => {
 .action-pill-btn:active {
   transform: scale(0.92) !important;
 }
+
 .field-label {
   font-family: "Aileron", -apple-system, sans-serif;
   font-size: 10px;
@@ -654,7 +684,7 @@ const openDocInAppPreview = (url: string) => {
   cursor: not-allowed;
 }
 
-/* FORCED PILL ROUNDING PARA SA EDIT BUTTON */
+/* EDIT BUTTON PILL STYLING */
 .edit-pill-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -662,7 +692,7 @@ const openDocInAppPreview = (url: string) => {
   gap: 6px !important;
   height: 32px !important;
   padding: 0 14px !important;
-  border-radius: 9999px !important; /* Ganap na bilog/pill shape */
+  border-radius: 9999px !important;
   border: 1px solid rgba(0, 217, 255, 0.45) !important;
   background: rgba(0, 217, 255, 0.1) !important;
   color: #00d9ff !important;
@@ -687,14 +717,15 @@ const openDocInAppPreview = (url: string) => {
 .edit-pill-btn:active {
   transform: scale(0.96) !important;
 }
-/* FORCED PILL ROUNDING PARA SA CLOSE DETAILS BUTTON */
+
+/* CLOSE DETAILS BUTTON STYLING */
 .close-pill-btn {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
   height: 36px !important;
   padding: 0 22px !important;
-  border-radius: 9999px !important; /* Full pill curve */
+  border-radius: 9999px !important;
   border: 1px solid rgba(255, 255, 255, 0.2) !important;
   background: rgba(255, 255, 255, 0.03) !important;
   color: #cbd5e1 !important;

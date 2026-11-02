@@ -2,6 +2,9 @@ import { defineStore } from 'pinia';
 import { supabase } from '@/lib/supabase';
 import type { UserRole, UserProfile } from '@/types';
 
+/**
+ * Interface representing user profile metadata structure
+ */
 export interface UserProfileData {
   id: string;
   email?: string;
@@ -17,6 +20,9 @@ export interface UserProfileData {
   updated_at?: string;
 }
 
+/**
+ * Authentication Store State Definition
+ */
 interface AuthState {
   user: UserProfile | UserProfileData | null;
   loading: boolean;
@@ -41,6 +47,9 @@ export const useAuthStore = defineStore('auth', {
   },
 
   actions: {
+    /**
+     * Initializes current authenticated session on app launch
+     */
     async initialize() {
       if (this.isInitialized) return;
       this.loading = true;
@@ -61,6 +70,9 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
+    /**
+     * Fetches user profile record from Database or constructs OAuth fallback
+     */
     async fetchProfile(userId?: string) {
       try {
         let targetId = userId;
@@ -77,7 +89,7 @@ export const useAuthStore = defineStore('auth', {
           return null;
         }
 
-        // Kunin ang profile mula sa public.profiles table
+        // Retrieve user profile from public.profiles table
         const { data, error } = await supabase
           .from('profiles')
           .select('*')
@@ -89,7 +101,7 @@ export const useAuthStore = defineStore('auth', {
         if (data) {
           this.user = data as UserProfileData;
         } else {
-          // Fallback para sa mga bagong Google OAuth users na wala pang row sa profiles table
+          // Fallback strategy for newly registered Google OAuth users prior to profile record insertion
           if (!authUser) {
             const { data: userRes } = await supabase.auth.getUser();
             authUser = userRes.user;
@@ -116,6 +128,9 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
+    /**
+     * Authenticates user with email and password
+     */
     async signIn(email: string, pass: string) {
       this.loading = true;
       this.error = null;
@@ -139,6 +154,9 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
+    /**
+     * Registers a new account with designated role metadata
+     */
     async signUp(email: string, pass: string, fullName: string, role: UserRole) {
       this.loading = true;
       this.error = null;
@@ -170,6 +188,9 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
+    /**
+     * Initiates Google OAuth authentication flow
+     */
     async signInWithGoogle() {
       this.loading = true;
       this.error = null;
@@ -193,6 +214,9 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
+    /**
+     * Assigns role and updates profile row for first-time Google OAuth users
+     */
     async assignGoogleRole(role: UserRole) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('No authenticated user session found.');
@@ -215,6 +239,9 @@ export const useAuthStore = defineStore('auth', {
       await this.fetchProfile(user.id);
     },
 
+    /**
+     * Clears session state and signs user out
+     */
     async signOut() {
       this.loading = true;
       this.error = null;

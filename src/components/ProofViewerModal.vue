@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 
+/**
+ * Component Props & Emits Definition
+ */
 const props = defineProps<{
   isOpen: boolean;
   mediaUrl: string | null;
@@ -12,14 +15,22 @@ const emit = defineEmits<{
   (e: 'close'): void;
 }>();
 
+/**
+ * Frame Render Loading State
+ */
 const isIframeLoading = ref(true);
 
+/**
+ * Checks if Target Document Media is PDF
+ */
 const isPdf = computed(() => {
   if (!props.mediaUrl) return false;
   return props.mediaUrl.toLowerCase().includes('.pdf');
 });
 
-// PDF / Document In-Frame Viewer URL
+/**
+ * PDF & Document In-Frame Viewer URL Resolver (Mozilla PDF.js / Google Docs Fallback)
+ */
 const inFrameViewerUrl = computed(() => {
   if (!props.mediaUrl) return '';
   if (isPdf.value) {
@@ -28,13 +39,17 @@ const inFrameViewerUrl = computed(() => {
   return `https://docs.google.com/viewer?url=${encodeURIComponent(props.mediaUrl)}&embedded=true`;
 });
 
-// Suriin kung YouTube video o Direct File (MP4/WebM/MOV)
+/**
+ * Verifies if Provided URL is YouTube Media
+ */
 const isYouTubeVideo = computed(() => {
   if (!props.mediaUrl) return false;
   return props.mediaUrl.includes('youtube.com') || props.mediaUrl.includes('youtu.be');
 });
 
-// Matatag na YouTube URL Parser na may playsinline=1 para sa phone
+/**
+ * Robust YouTube Embed URL Parser supporting Mobile Inline Playback
+ */
 const getEmbedVideoUrl = (url: string): string => {
   if (!url) return '';
   
@@ -58,6 +73,9 @@ const getEmbedVideoUrl = (url: string): string => {
   return url;
 };
 
+/**
+ * Watcher: Reset Frame Loading Indicator on Open
+ */
 watch(
   () => props.isOpen,
   (open) => {
@@ -73,6 +91,7 @@ watch(
     v-if="isOpen && mediaUrl" 
     class="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-5 bg-black/90 backdrop-blur-md select-none overflow-y-auto"
   >
+    <!-- MAIN MODAL CONTAINER -->
     <div class="w-full max-w-4xl h-[88vh] sm:h-[90vh] my-auto rounded-[24px] bg-[#050811]/95 border border-white/15 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
       
       <!-- TOP HEADER BAR -->
@@ -85,7 +104,7 @@ watch(
             </svg>
             <!-- DOCUMENT ICON -->
             <svg v-else-if="mediaType === 'document'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 01-2-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
             <!-- VIDEO ICON -->
             <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -128,7 +147,7 @@ watch(
           />
         </div>
 
-        <!-- 2. DOCUMENT / PDF IN-APP IN-FRAME PREVIEW -->
+        <!-- 2. DOCUMENT / PDF IN-APP FRAME PREVIEW -->
         <div v-else-if="mediaType === 'document'" class="w-full h-full rounded-2xl overflow-hidden border border-white/15 bg-white relative flex flex-col">
           <div v-if="isIframeLoading" class="absolute inset-0 bg-[#070b12] flex flex-col items-center justify-center gap-2.5 z-10">
             <div class="spinner-ring border-[#00d9ff]"></div>
@@ -144,9 +163,9 @@ watch(
           ></iframe>
         </div>
 
-        <!-- 3. VIDEO PREVIEW (TUGMA SA YOUTUBE AT DIRECT VIDEO FILES) -->
+        <!-- 3. VIDEO PREVIEW (YOUTUBE & DIRECT VIDEO FILES) -->
         <div v-else-if="mediaType === 'video'" class="w-full h-full max-w-3xl aspect-video rounded-2xl overflow-hidden border border-white/20 bg-black relative flex items-center justify-center shadow-2xl">
-          <!-- KUNG YOUTUBE EMBED -->
+          <!-- YOUTUBE EMBED PLAYER -->
           <iframe 
             v-if="isYouTubeVideo"
             :src="getEmbedVideoUrl(mediaUrl)" 
@@ -156,7 +175,7 @@ watch(
             playsinline
           ></iframe>
 
-          <!-- KUNG DIRECT VIDEO FILE (MP4/WEBM/MOV MULA SA STORAGE) -->
+          <!-- HTML5 NATIVE VIDEO PLAYER (MP4/WEBM/MOV) -->
           <video 
             v-else
             :src="mediaUrl" 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/auth';
@@ -18,13 +18,9 @@ import TraiNextSpinner from '@/components/TraiNextSpinner.vue';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-let realtimeChannel: any = null;
-let liveTimerInterval: any = null;
-let internMap: L.Map | null = null;
-let internUserMarker: L.CircleMarker | null = null;
-let internSiteCircle: L.Circle | null = null;
-let internSiteMarker: L.Marker | null = null;
-
+/**
+ * Service & Store Instances
+ */
 const router = useRouter();
 const authStore = useAuthStore();
 const attendanceStore = useAttendanceStore();
@@ -32,10 +28,24 @@ const accomplishmentsStore = useAccomplishmentsStore();
 const toast = useToast();
 const { coordinates, refreshLocation } = useGeolocation();
 
-// Active Bottom Tab ('home' | 'reports' | 'attendance')
+/**
+ * Global Leaflet Map & Realtime Subscriptions
+ */
+let realtimeChannel: any = null;
+let liveTimerInterval: any = null;
+let internMap: L.Map | null = null;
+let internUserMarker: L.CircleMarker | null = null;
+let internSiteCircle: L.Circle | null = null;
+let internSiteMarker: L.Marker | null = null;
+
+/**
+ * Active Navigation Tab State ('home' | 'reports' | 'attendance')
+ */
 const activeMainTab = ref<'home' | 'reports' | 'attendance'>('home');
 
-// UI Modals
+/**
+ * UI State & Modal Controls
+ */
 const isProfileSettingsOpen = ref(false);
 const isAccomplishmentModalOpen = ref(false);
 const isSafeAtBaseModalOpen = ref(false);
@@ -43,15 +53,22 @@ const isProofViewerOpen = ref(false);
 const showSignOutConfirm = ref(false);
 const isSigningOut = ref(false);
 
-// Detail Modal State
+/**
+ * Accomplishment Detail Modal State
+ */
 const isDetailModalOpen = ref(false);
 const selectedLogForDetail = ref<any | null>(null);
 
+/**
+ * Proof Viewer Media State
+ */
 const activeProofUrl = ref<string | null>(null);
 const activeProofType = ref<'image' | 'document' | 'video' | null>(null);
 const activeProofTitle = ref('');
 
-// State
+/**
+ * Supervisor & Company Site Affiliation State
+ */
 const supervisorSite = ref<CompanySite | null>(null);
 const supervisorInfo = ref<{ full_name?: string; email?: string } | null>(null);
 const internLinkStatus = ref<'none' | 'pending' | 'approved' | 'rejected'>('none');
@@ -60,20 +77,30 @@ const availableSupervisors = ref<any[]>([]);
 const linkingLoading = ref(false);
 const isInitialLoading = ref(true);
 
-// State para sa pag-track kung nabisita na ang Reports tab (notif dismiss logic)
+/**
+ * Notification Badge Dismissal Tracking Flags
+ */
 const hasViewedReportsTab = ref(false);
 
-// Instant Click Visual Feedback State para sa Clock In/Out
+/**
+ * Instant Click Visual Feedback State for Attendance Actions
+ */
 const isVerifying = ref(false);
 
-// Live Timer State
+/**
+ * Live Stopwatch Timer State
+ */
 const elapsedTimeText = ref('00h 00m 00s');
 
-// Accomplishment Filters
+/**
+ * Accomplishment Reports Filters
+ */
 const activeAccomplishmentTab = ref<'all' | 'pending' | 'approved' | 'rejected'>('all');
-const reportDateFilter = ref<string>(''); // Filter by Date
+const reportDateFilter = ref<string>('');
 
-// Geofence Error State
+/**
+ * Geofence Validation Error Modal State
+ */
 const geofenceError = ref<{
   isOpen: boolean;
   companyName: string;
@@ -86,7 +113,9 @@ const geofenceError = ref<{
   allowedRadius: 0,
 });
 
-// Target Hours Progress Calculation
+/**
+ * Target OJT Rendered Hours Progress Calculation
+ */
 const requiredHours = computed(() => {
   return Number((authStore.user as any)?.required_hours) || 486;
 });
@@ -104,7 +133,9 @@ const progressPercentage = computed(() => {
   return Math.min(Math.round(pct), 100);
 });
 
-// Shift Status Helpers
+/**
+ * Shift Status Helpers
+ */
 const currentShift = computed(() => attendanceStore.activeShift);
 const currentStatus = computed(() => attendanceStore.activeShift?.status || null);
 
@@ -115,32 +146,36 @@ const currentStatusText = computed(() => {
   return 'Not Clocked In';
 });
 
-// Raw count ng mga may feedback
-const rawFeedbackCount = computed(() => {
-  return (accomplishmentsStore.logs || []).filter((l: any) => l.feedback && l.status !== 'pending').length;
-});
-
-// Notification Badge Counter: kapag nabisita na ang reports tab, nagiging 0 ito
+/**
+ * Dynamic Notification Badge Counter for Reports Tab
+ */
 const unreadFeedbackCount = computed(() => {
   if (hasViewedReportsTab.value) return 0;
-  return rawFeedbackCount.value;
+  return accomplishmentsStore.unreadCount || 0;
 });
 
-// Watcher kapag lumipat sa reports tab
+/**
+ * Tab Navigation Event Listener for Auto-Dismissing Badges
+ */
 watch(activeMainTab, (newTab) => {
   if (newTab === 'reports') {
     hasViewedReportsTab.value = true;
+    accomplishmentsStore.markAllAsRead();
   }
 });
 
-// Watcher: kung may dumating na bagong feedback habang wala sa reports tab, ibalik ang badge
-watch(rawFeedbackCount, (newVal, oldVal) => {
+/**
+ * Reactivate Reports Badge on New Unread Feedback
+ */
+watch(() => accomplishmentsStore.unreadCount, (newVal, oldVal) => {
   if (newVal > oldVal && activeMainTab.value !== 'reports') {
     hasViewedReportsTab.value = false;
   }
 });
 
-// Filtered Accomplishments (Tab + Date Filter)
+/**
+ * Filtered Accomplishment Reports Feed
+ */
 const filteredAccomplishments = computed(() => {
   let list = accomplishmentsStore.logs || [];
   if (activeAccomplishmentTab.value !== 'all') {
@@ -152,7 +187,9 @@ const filteredAccomplishments = computed(() => {
   return list;
 });
 
-// Stopwatch Tick Calculation
+/**
+ * Live Stopwatch Tick Updater for Active Shift
+ */
 const updateLiveTimer = () => {
   if (currentStatus.value === 'on_duty' && currentShift.value?.time_in) {
     const diffMs = Math.max(0, new Date().getTime() - new Date(currentShift.value.time_in).getTime());
@@ -166,7 +203,9 @@ const updateLiveTimer = () => {
   }
 };
 
-// Render Intern Leaflet Mini-Map
+/**
+ * Renders and Updates Leaflet Geofence Mini-Map for Trainees
+ */
 const renderInternGeofenceMap = () => {
   if (activeMainTab.value !== 'home') return;
   nextTick(() => {
@@ -243,7 +282,9 @@ watch(
   { deep: true }
 );
 
-// Load Supervisor Affiliation Status
+/**
+ * Fetches Trainee's Supervisor Affiliation & Company Site
+ */
 const fetchAffiliation = async () => {
   if (!authStore.user?.id) return;
 
@@ -312,6 +353,9 @@ const fetchAffiliation = async () => {
   }
 };
 
+/**
+ * Requests Affiliation Link to Selected Supervisor
+ */
 const requestAffiliation = async () => {
   if (!selectedSupervisorId.value || !authStore.user?.id) return;
   linkingLoading.value = true;
@@ -333,6 +377,9 @@ const requestAffiliation = async () => {
   }
 };
 
+/**
+ * Computes Distance Between Two Coordinates via Haversine Formula
+ */
 const computeDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
   const R = 6371e3;
   const φ1 = (lat1 * Math.PI) / 180;
@@ -343,6 +390,9 @@ const computeDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: n
   return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };
 
+/**
+ * Handles Clock In / Clock Out Attendance Verification
+ */
 const handleAttendanceAction = async () => {
   if (!authStore.user?.id || isVerifying.value || attendanceStore.loading) return;
 
@@ -392,11 +442,18 @@ const handleAttendanceAction = async () => {
   }
 };
 
+/**
+ * Opens Accomplishment Report Detail Modal
+ */
 const openLogDetail = (log: any) => {
   selectedLogForDetail.value = log;
+  accomplishmentsStore.markAsRead(log.id);
   isDetailModalOpen.value = true;
 };
 
+/**
+ * Inspects Proof Attachments
+ */
 const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: string) => {
   activeProofUrl.value = url;
   activeProofType.value = type;
@@ -404,6 +461,9 @@ const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: 
   isProofViewerOpen.value = true;
 };
 
+/**
+ * Handles Session Sign Out
+ */
 const handleSignOut = async () => {
   showSignOutConfirm.value = false;
   isSigningOut.value = true;
@@ -418,6 +478,9 @@ const handleSignOut = async () => {
   }
 };
 
+/**
+ * Master Data Refetch Utility
+ */
 const refreshData = async () => {
   if (!authStore.user?.id) return;
 
@@ -440,6 +503,9 @@ const refreshData = async () => {
   }
 };
 
+/**
+ * Lifecycle Hook: Mounting & Realtime Initialization
+ */
 onMounted(async () => {
   isInitialLoading.value = true;
   try {
@@ -454,6 +520,8 @@ onMounted(async () => {
     liveTimerInterval = setInterval(updateLiveTimer, 1000);
 
     if (authStore.user?.id) {
+      accomplishmentsStore.subscribeToRealtime(authStore.user.id, 'intern');
+
       realtimeChannel = supabase
         .channel(`intern-live-${authStore.user.id}`)
         .on(
@@ -491,9 +559,13 @@ onMounted(async () => {
   }
 });
 
+/**
+ * Lifecycle Hook: Unmounting & Cleanup
+ */
 onUnmounted(() => {
   if (liveTimerInterval) clearInterval(liveTimerInterval);
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
+  accomplishmentsStore.unsubscribeRealtime();
   if (internMap) {
     internMap.remove();
     internMap = null;
@@ -510,7 +582,7 @@ onUnmounted(() => {
     <TraiNextSpinner v-if="isInitialLoading" label="Loading..." />
     <TraiNextSpinner v-if="isSigningOut" label="Signing Out..." />
 
-    <!-- STICKY HEADER BAR (FLAT, ZERO CORNER ROUNDING PARA FLAT SA SCROLL) -->
+    <!-- STICKY HEADER BAR -->
     <header class="trainext-glass-card sticky-intern-header flex items-center justify-between gap-2 px-3.5 sm:px-5 py-3">
       <div class="trainext-brand-group flex items-center gap-2.5 min-w-0">
         <img src="/assets/trainext-logo.png" alt="TraiNext" class="w-8 h-8 sm:w-9 sm:h-9 object-contain shrink-0" />
@@ -694,7 +766,7 @@ onUnmounted(() => {
 
             <!-- ATTENDANCE BUTTON ACTIONS -->
             <div class="pt-2 flex items-center justify-center w-full">
-              <!-- CLOCK IN (CYAN) -->
+              <!-- CLOCK IN -->
               <button 
                 type="button"
                 v-if="!currentStatus || currentStatus === 'safe_at_base'"
@@ -709,7 +781,7 @@ onUnmounted(() => {
                 <span>{{ (isVerifying || attendanceStore.loading) ? 'VERIFYING GPS...' : 'CLOCK IN' }}</span>
               </button>
 
-              <!-- CLOCK OUT (RED/ROSE ALERT) -->
+              <!-- CLOCK OUT -->
               <button 
                 type="button"
                 v-else-if="currentStatus === 'on_duty'"
@@ -724,7 +796,7 @@ onUnmounted(() => {
                 <span>{{ (isVerifying || attendanceStore.loading) ? 'VERIFYING GPS...' : 'CLOCK OUT' }}</span>
               </button>
 
-              <!-- I AM SAFE AT BASE (EMERALD GREEN) -->
+              <!-- I AM SAFE AT BASE -->
               <button 
                 type="button"
                 v-else-if="currentStatus === 'in_transit'"
@@ -751,7 +823,7 @@ onUnmounted(() => {
               <p class="trainext-subtitle text-[11px]">Review daily logs and supervisor verification.</p>
             </div>
 
-            <!-- RIGHT-ALIGNED + NEW REPORT BUTTON -->
+            <!-- NEW REPORT BUTTON -->
             <button 
               type="button" 
               @click="isAccomplishmentModalOpen = true"
@@ -765,7 +837,7 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <!-- FULL-WIDTH DATE FILTER BAR -->
+          <!-- DATE FILTER BAR -->
           <div class="flex items-center gap-2 pt-1 w-full">
             <div class="relative flex-1 flex items-center min-w-0">
               <span class="absolute left-3.5 pointer-events-none text-[10px] font-bold text-slate-400 uppercase tracking-wider font-['Aileron',sans-serif]">
@@ -906,7 +978,7 @@ onUnmounted(() => {
       </footer>
     </div>
 
-    <!-- ================= FIXED BOTTOM NAV (ICON-ONLY + AUTO-DISMISS NOTIF BADGE) ================= -->
+    <!-- ================= FIXED BOTTOM NAV ================= -->
     <nav class="fixed-bottom-bar" aria-label="Bottom Navigation">
       <div class="bottom-bar-inner">
         <!-- TAB 1: HOME -->
@@ -925,10 +997,10 @@ onUnmounted(() => {
           <span v-if="activeMainTab === 'home'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 2: REPORTS (MAWAWALA ANG BADGE KAPAG NABISITA O PININDOT NA) -->
+        <!-- TAB 2: REPORTS -->
         <button 
           type="button" 
-          @click="activeMainTab = 'reports'; hasViewedReportsTab = true;"
+          @click="activeMainTab = 'reports'; hasViewedReportsTab = true; accomplishmentsStore.markAllAsRead();"
           class="bottom-nav-item"
           :class="{ active: activeMainTab === 'reports' }"
           aria-label="Accomplishment Reports"
@@ -1053,7 +1125,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* STICKY HEADER (FLAT, ZERO CORNER ROUNDING, NAKA-LOCK SA TAAS) */
+/* STICKY HEADER */
 .sticky-intern-header {
   position: sticky !important;
   top: 0 !important;
@@ -1151,7 +1223,7 @@ onUnmounted(() => {
   filter: grayscale(0.5) !important;
 }
 
-/* ================= ATTENDANCE PILL CONTROLS (RAPID TOUCH, ACCURATE TARGET) ================= */
+/* ATTENDANCE PILL CONTROLS */
 .attendance-pill-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -1411,7 +1483,7 @@ onUnmounted(() => {
 .report-tabs-nav .tab-divider:nth-of-type(2) { left: 50%; }
 .report-tabs-nav .tab-divider:nth-of-type(3) { left: 75%; }
 
-/* FIXED CYBER-GLASS BOTTOM NAVIGATION (ICON-ONLY) */
+/* FIXED CYBER-GLASS BOTTOM NAVIGATION */
 .fixed-bottom-bar {
   position: fixed;
   bottom: 0;
@@ -1467,7 +1539,6 @@ onUnmounted(() => {
   transform: translateY(-2px);
 }
 
-/* NOTIFICATION BADGE NA MAY BILANG */
 .nav-badge-count {
   position: absolute;
   top: -6px;
@@ -1491,7 +1562,6 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
-/* ACTIVE TAB INDICATOR SA ILALIM */
 .active-dot {
   position: absolute;
   bottom: 6px;

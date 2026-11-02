@@ -3,6 +3,9 @@ import { ref, watch, onMounted } from 'vue';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/auth';
 
+/**
+ * Component Props & Emits Definition
+ */
 const props = defineProps<{
   isOpen: boolean;
 }>();
@@ -12,19 +15,29 @@ const emit = defineEmits<{
   (e: 'saved'): void;
 }>();
 
+/**
+ * Store Instances
+ */
 const authStore = useAuthStore();
 
-// Form Fields
+/**
+ * Profile Form Fields State
+ */
 const fullName = ref('');
 const contactNumber = ref('');
 const userEmail = ref('');
 const isOAuthUser = ref(false);
 
+/**
+ * Credential Change State
+ */
 const currentPassword = ref('');
 const newPassword = ref('');
 const confirmPassword = ref('');
 
-// UI States
+/**
+ * UI State & Asynchronous Controls
+ */
 const isSubmitting = ref(false);
 const showCurrentPassword = ref(false);
 const showNewPassword = ref(false);
@@ -32,6 +45,9 @@ const showConfirmPassword = ref(false);
 const errorMessage = ref('');
 const successMessage = ref('');
 
+/**
+ * Synchronizes Authenticated User Credentials & Profile Info
+ */
 const syncUserData = async () => {
   try {
     const { data } = await supabase.auth.getUser();
@@ -50,6 +66,9 @@ const syncUserData = async () => {
   }
 };
 
+/**
+ * Watcher: Reset Form Fields & Fetch Latest Profile Data on Modal Open
+ */
 watch(
   () => props.isOpen,
   async (open) => {
@@ -67,10 +86,16 @@ watch(
   }
 );
 
+/**
+ * Lifecycle Hook: Initial Synchronization
+ */
 onMounted(async () => {
   await syncUserData();
 });
 
+/**
+ * Handles Profile & Credential Updates with Supabase Auth Verification
+ */
 const handleSave = async () => {
   if (!authStore.user?.id) {
     errorMessage.value = 'User session not found. Please log in again.';
@@ -115,6 +140,7 @@ const handleSave = async () => {
 
   try {
     if (wantsPasswordChange && userEmail.value) {
+      // Re-authenticate user with current password before updating credentials
       const { error: verifyError } = await supabase.auth.signInWithPassword({
         email: userEmail.value,
         password: currentPassword.value,
@@ -131,6 +157,7 @@ const handleSave = async () => {
       if (passwordError) throw passwordError;
     }
 
+    // Update profile information in database
     const { error: profileError } = await supabase
       .from('profiles')
       .update({
@@ -165,6 +192,7 @@ const handleSave = async () => {
     v-if="isOpen" 
     class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/85 backdrop-blur-md select-none overflow-y-auto"
   >
+    <!-- MAIN MODAL CONTAINER -->
     <div class="w-full max-w-md my-auto rounded-[24px] bg-[#050811]/95 border border-white/15 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
       
       <!-- MODAL HEADER -->
@@ -445,9 +473,7 @@ const handleSave = async () => {
   box-shadow: 0 0 10px rgba(0, 217, 255, 0.25);
 }
 
-/* ================= ERGONOMIC PILL BUTTON STANDARDS ================= */
-
-/* CYAN PRIMARY PILL BUTTON */
+/* ERGONOMIC PILL BUTTON STANDARDS */
 .pill-cyan-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -487,7 +513,6 @@ const handleSave = async () => {
   transform: none !important;
 }
 
-/* NEUTRAL CANCEL PILL BUTTON */
 .pill-neutral-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -515,7 +540,7 @@ const handleSave = async () => {
   transform: scale(0.96) !important;
 }
 
-/* INLINE SPINNER RING */
+/* SPINNER RING */
 .spinner-ring {
   width: 14px;
   height: 14px;

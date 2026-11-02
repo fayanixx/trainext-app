@@ -5,12 +5,17 @@ import { calculateHoursRendered } from '@/lib/geofence';
 import type { AttendanceLog } from '@/types';
 
 export const useAttendanceStore = defineStore('attendance', () => {
+  /**
+   * Reactive Attendance State
+   */
   const activeShift = ref<AttendanceLog | null>(null);
   const attendanceHistory = ref<AttendanceLog[]>([]);
   const loading = ref(false);
   const errorMessage = ref<string | null>(null);
 
-  // Computed Session Statuses
+  /**
+   * Computed Session Statuses
+   */
   const isOnDuty = computed(() => activeShift.value?.status === 'on_duty');
   const isInTransit = computed(() => activeShift.value?.status === 'in_transit');
   const isSafeAtBase = computed(() => activeShift.value?.status === 'safe_at_base');
@@ -23,7 +28,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
   });
 
   /**
-   * 1. Kunin ang shift ng intern para sa kasalukuyang araw
+   * Fetches active shift log for the specified intern on the current calendar date
    */
   const fetchTodayShift = async (internId: string) => {
     if (!internId) return null;
@@ -55,41 +60,41 @@ export const useAttendanceStore = defineStore('attendance', () => {
   };
 
   /**
-   * 2. Log Geofenced Time-In (Malinis na payload na tumutugma sa normalized schema)
+   * Records geofenced Time-In via Database RPC with anti-spoofing validation
    */
-    const logTimeIn = async (params: {
-        internId: string;
-        latitude: number;
-        longitude: number;
-        supervisorId?: string;
-        siteId?: string;
-      }) => {
-        loading.value = true;
-        errorMessage.value = null;
+  const logTimeIn = async (params: {
+    internId: string;
+    latitude: number;
+    longitude: number;
+    supervisorId?: string;
+    siteId?: string;
+  }) => {
+    loading.value = true;
+    errorMessage.value = null;
 
-        try {
-          // Tawagin ang database function para sa anti-spoofing check
-          const { data, error } = await supabase.rpc('secure_clock_in', {
-            p_intern_id: params.internId,
-            p_latitude: params.latitude,
-            p_longitude: params.longitude,
-          });
+    try {
+      // Invoke Database RPC Procedure for Geofence & Anti-Spoofing Checks
+      const { data, error } = await supabase.rpc('secure_clock_in', {
+        p_intern_id: params.internId,
+        p_latitude: params.latitude,
+        p_longitude: params.longitude,
+      });
 
-          if (error) throw error;
+      if (error) throw error;
 
-          activeShift.value = data.log as AttendanceLog;
-          await fetchAttendanceHistory(params.internId);
-          return activeShift.value;
-        } catch (err: any) {
-          errorMessage.value = err.message || 'Failed to record Time In.';
-          throw err;
-        } finally {
-          loading.value = false;
-        }
-      };
+      activeShift.value = data.log as AttendanceLog;
+      await fetchAttendanceHistory(params.internId);
+      return activeShift.value;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Failed to record Time In.';
+      throw err;
+    } finally {
+      loading.value = false;
+    }
+  };
 
   /**
-   * 3. Log Time-Out at Awtomatikong mag-transition sa 'in_transit' status
+   * Records Time-Out, computes total hours rendered, and transitions state to 'in_transit'
    */
   const logTimeOut = async (params?: {
     internId?: string;
@@ -153,7 +158,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
   };
 
   /**
-   * 4. Confirm Safe at Base (Arrival & Waiver Confirmation)
+   * Confirms intern arrival at safe quarters and updates shift status to 'safe_at_base'
    */
   const confirmSafeAtBase = async (params?: {
     logId?: string;
@@ -214,7 +219,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
   };
 
   /**
-   * 5. Kunin ang attendance history ng intern
+   * Fetches historical attendance logs for an intern ordered chronologically
    */
   const fetchAttendanceHistory = async (internId: string) => {
     if (!internId) return [];

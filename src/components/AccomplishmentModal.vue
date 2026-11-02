@@ -3,6 +3,9 @@ import { ref } from 'vue';
 import { supabase } from '@/lib/supabase';
 import { useToast } from '@/composables/useToast';
 
+/**
+ * Component Props & Emits Definition
+ */
 const props = defineProps<{
   isOpen: boolean;
   internId: string;
@@ -15,18 +18,25 @@ const emit = defineEmits<{
 
 const toast = useToast();
 
-// Form Fields
+/**
+ * Accomplishment Report Form State
+ */
 const title = ref('');
 const description = ref('');
 const reportDate = ref(new Date().toISOString().split('T')[0]);
 const videoUrl = ref('');
 
-// Media Attachments State
+/**
+ * Attachment Files State & Loading Controls
+ */
 const imageFiles = ref<File[]>([]);
 const docFiles = ref<File[]>([]);
 const isUploading = ref(false);
 const errorMessage = ref('');
 
+/**
+ * File Input Change Handlers
+ */
 const handleImageChange = (e: Event) => {
   const target = e.target as HTMLInputElement;
   if (target.files) {
@@ -41,6 +51,9 @@ const handleDocChange = (e: Event) => {
   }
 };
 
+/**
+ * Uploads Proof Attachments to Supabase Storage Bucket
+ */
 const uploadFilesToBucket = async (files: File[], folder: string): Promise<string[]> => {
   const urls: string[] = [];
   for (const file of files) {
@@ -61,6 +74,9 @@ const uploadFilesToBucket = async (files: File[], folder: string): Promise<strin
   return urls;
 };
 
+/**
+ * Handles Accomplishment Report Submission
+ */
 const handleSubmit = async () => {
   if (!title.value.trim() || !description.value.trim()) {
     errorMessage.value = 'Please provide a task title and detailed accomplishment description.';
@@ -93,7 +109,7 @@ const handleSubmit = async () => {
 
     toast.success('Daily accomplishment report submitted successfully.', 'REPORT SAVED');
 
-    // Reset Form Fields
+    // Reset Form Fields Post-Submission
     title.value = '';
     description.value = '';
     reportDate.value = new Date().toISOString().split('T')[0];
@@ -117,15 +133,15 @@ const handleSubmit = async () => {
     v-if="isOpen" 
     class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/80 backdrop-blur-md select-none overflow-y-auto"
   >
-    <!-- MAIN MODAL CONTAINER (DEEP CYBER-GLASS CARD) -->
+    <!-- MAIN MODAL CONTAINER -->
     <div class="w-full max-w-[540px] my-auto rounded-[24px] bg-[#050811]/95 border border-white/15 shadow-[0_10px_40px_rgba(0,0,0,0.8),0_0_30px_rgba(0,217,255,0.08)] backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
       
-      <!-- MODAL TOP BAR (NO TEXT WRAP / ONE LINE HEADER) -->
+      <!-- MODAL TOP BAR -->
       <header class="px-5 sm:px-6 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.015]">
         <div class="flex items-center gap-3 min-w-0">
           <div class="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-[#00d9ff] shrink-0 shadow-[0_0_12px_rgba(0,217,255,0.2)]">
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 01-2-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
           </div>
           <div class="min-w-0">
@@ -386,7 +402,7 @@ const handleSubmit = async () => {
   border-color: rgba(0, 217, 255, 0.4);
 }
 
-/* SUBMIT BUTTON (MATCHING LOGIN / PRIMARY BUTTONS) */
+/* SUBMIT BUTTON */
 .submit-pill-btn {
   display: inline-flex;
   align-items: center;

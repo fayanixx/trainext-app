@@ -5,6 +5,9 @@ import type { CompanySite } from '@/types';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
+/**
+ * Component Props & Emits Definition
+ */
 const props = defineProps<{
   isOpen: boolean;
   supervisorId: string;
@@ -16,24 +19,32 @@ const emit = defineEmits<{
   (e: 'saved', site: CompanySite): void;
 }>();
 
-// Form Fields
+/**
+ * Form Fields State
+ */
 const companyName = ref('');
 const officeAddress = ref('');
 const latitude = ref<number>(13.4115);
 const longitude = ref<number>(121.1803);
 const radiusMeters = ref<number>(100);
 
-// UI States
+/**
+ * UI State & Asynchronous Loading Indicators
+ */
 const isSubmitting = ref(false);
 const isLocating = ref(false);
 const errorMessage = ref('');
 
-// Leaflet Map References
+/**
+ * Global Leaflet Map Instance References
+ */
 let map: L.Map | null = null;
 let marker: L.Marker | null = null;
 let circle: L.Circle | null = null;
 
-// Initialize or Update Map
+/**
+ * Initializes or Updates Leaflet Map Container & Interactive Pin/Circle Controls
+ */
 const initMap = () => {
   nextTick(() => {
     const mapContainer = document.getElementById('geofence-map');
@@ -49,7 +60,7 @@ const initMap = () => {
         maxZoom: 19,
       }).addTo(map);
 
-      // Custom Cyan Pin
+      // Custom Neon Cyan Pin Marker
       const cyanIcon = L.divIcon({
         className: 'custom-leaflet-pin',
         html: `<div style="width: 14px; height: 14px; background: #00d9ff; border: 2px solid #ffffff; border-radius: 50%; box-shadow: 0 0 10px #00d9ff;"></div>`,
@@ -67,6 +78,7 @@ const initMap = () => {
         radius: radiusMeters.value,
       }).addTo(map);
 
+      // Marker Drag Event Handler
       marker.on('dragend', () => {
         if (!marker) return;
         const pos = marker.getLatLng();
@@ -75,6 +87,7 @@ const initMap = () => {
         if (circle) circle.setLatLng(pos);
       });
 
+      // Map Direct Click Event Handler
       map.on('click', (e: L.LeafletMouseEvent) => {
         latitude.value = parseFloat(e.latlng.lat.toFixed(6));
         longitude.value = parseFloat(e.latlng.lng.toFixed(6));
@@ -97,9 +110,12 @@ const initMap = () => {
   });
 };
 
+/**
+ * Acquires Device's Current GPS Location with High-Accuracy Fallback Strategy
+ */
 const getCurrentLocation = () => {
   if (!navigator.geolocation) {
-    errorMessage.value = 'Geolocation is not supported by your browser.';
+    errorMessage.value = 'Geolocation service is not supported by this browser environment.';
     return;
   }
 
@@ -111,7 +127,6 @@ const getCurrentLocation = () => {
     longitude.value = parseFloat(lng.toFixed(6));
 
     if (map) {
-      // Piliting lumipat ang paningin ng mapa sa eksaktong bagong coordinate
       map.setView([latitude.value, longitude.value], 17, { animate: true });
       if (marker) marker.setLatLng([latitude.value, longitude.value]);
       if (circle) circle.setLatLng([latitude.value, longitude.value]);
@@ -119,20 +134,19 @@ const getCurrentLocation = () => {
     isLocating.value = false;
   };
 
-  // Pilitin ang browser na huwag gumamit ng lumang naka-cache na lokasyon (maximumAge: 0)
+  // Force acquisition without using cached coordinates (maximumAge: 0)
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       applyCoords(pos.coords.latitude, pos.coords.longitude);
     },
     (err) => {
-      console.warn('Direct GPS acquisition issue, retrying without strict high-accuracy...', err.message);
-      // Fallback
+      console.warn('High-accuracy GPS acquisition failed. Attempting low-accuracy fallback...', err.message);
       navigator.geolocation.getCurrentPosition(
         (fallbackPos) => {
           applyCoords(fallbackPos.coords.latitude, fallbackPos.coords.longitude);
         },
         (fallbackErr) => {
-          errorMessage.value = `Location acquisition error: ${fallbackErr.message}. Maaari mong i-click nang direkta sa mapa kung saan ang tamang lugar.`;
+          errorMessage.value = `Location acquisition failed: ${fallbackErr.message}. You can manually select or drag the location pin on the map.`;
           isLocating.value = false;
         },
         { enableHighAccuracy: false, timeout: 15000, maximumAge: 0 }
@@ -142,14 +156,18 @@ const getCurrentLocation = () => {
   );
 };
 
-// Watch for Radius Slider Changes
+/**
+ * Watcher: Real-Time Radius Slider Adjustment Update
+ */
 watch(radiusMeters, (newRadius) => {
   if (circle) {
     circle.setRadius(newRadius);
   }
 });
 
-// Watch isOpen to populate data and trigger map layout
+/**
+ * Watcher: Populate Initial Modal Data and Control Leaflet Instance Lifecycle
+ */
 watch(
   () => props.isOpen,
   (open) => {
@@ -173,7 +191,9 @@ watch(
   }
 );
 
-// Save or Update Geofence with Schema Resilience
+/**
+ * Submits Company Geofence Site Configuration with Database Schema Resilience
+ */
 const handleSave = async () => {
   if (!companyName.value.trim() || !officeAddress.value.trim()) {
     errorMessage.value = 'Please provide company name and office address.';
@@ -203,7 +223,7 @@ const handleSave = async () => {
         .select()
         .maybeSingle();
 
-      // Fallback kung "address" ang column name sa database
+      // Database schema fallback if column is named "address" instead of "office_address"
       if (error && error.message?.includes('office_address')) {
         delete payload.office_address;
         payload.address = officeAddress.value.trim();
@@ -227,7 +247,7 @@ const handleSave = async () => {
         .select()
         .maybeSingle();
 
-      // Fallback kung "address" ang column name sa database
+      // Database schema fallback if column is named "address" instead of "office_address"
       if (error && error.message?.includes('office_address')) {
         delete payload.office_address;
         payload.address = officeAddress.value.trim();
@@ -262,7 +282,7 @@ const handleSave = async () => {
   >
     <div class="w-full max-w-xl my-auto trainext-glass-card rounded-[28px] p-6 flex flex-col gap-4 border border-white/20 shadow-2xl">
       
-      <!-- HEADER -->
+      <!-- MODAL HEADER -->
       <div class="flex items-center justify-between pb-2 border-b border-white/10">
         <div>
           <h2 class="text-base font-bold text-white tracking-tight">Configure Office Perimeter</h2>
@@ -279,7 +299,7 @@ const handleSave = async () => {
         </button>
       </div>
 
-      <!-- ERROR FEEDBACK -->
+      <!-- ERROR FEEDBACK DISPLAY -->
       <div v-if="errorMessage" class="p-2.5 rounded-xl bg-red-950/60 border border-red-500/40 text-xs text-red-200">
         {{ errorMessage }}
       </div>
@@ -377,7 +397,7 @@ const handleSave = async () => {
           </div>
         </div>
 
-        <!-- ACTIONS -->
+        <!-- MODAL ACTION BUTTONS -->
         <div class="flex items-center justify-end gap-2.5 pt-3 border-t border-white/10">
           <button 
             type="button" 
