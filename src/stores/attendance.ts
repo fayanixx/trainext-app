@@ -72,7 +72,6 @@ export const useAttendanceStore = defineStore('attendance', () => {
       const today = new Date().toISOString().split('T')[0];
       const currentTimeIso = new Date().toTimeString().split(' ')[0]; // HH:MM:SS format para sa TIME column
 
-      // Kung wala pang record ngayong araw at AM In ang kailangan, gumawa ng bagong row
       if (!activeShift.value) {
         if (params.slot !== 'am_arrival') {
           throw new Error('Kailangan munang mag-Time In (AM Arrival) ngayong umaga.');
@@ -95,7 +94,6 @@ export const useAttendanceStore = defineStore('attendance', () => {
         if (error) throw error;
         activeShift.value = data as AttendanceLog;
       } else {
-        // I-update ang umiiral na attendance log depende sa slot
         const updatePayload: Record<string, any> = {};
         
         if (params.slot === 'am_arrival') {
@@ -110,8 +108,6 @@ export const useAttendanceStore = defineStore('attendance', () => {
         } else if (params.slot === 'pm_departure') {
           if (activeShift.value.pm_departure) throw new Error('Mayroon nang PM Departure record.');
           updatePayload.pm_departure = currentTimeIso;
-          
-          // Kalkulahin din ang kabuuang oras o undertime kung kinakailangan dito
         }
 
         if (params.latitude !== undefined) {
@@ -138,6 +134,82 @@ export const useAttendanceStore = defineStore('attendance', () => {
       return activeShift.value;
     } catch (err: any) {
       errorMessage.value = err.message || 'Nabigong maitala ang oras.';
+      throw err;
+    } finally {
+      loading.value = false;
+    }
+  };
+
+  /**
+   * Action para sa Safe at Base Confirmation mula sa SafeAtBaseModal.vue
+   */
+  const confirmSafeAtBase = async (params: {
+    logId?: string;
+    internId?: string;
+    transitNotes?: string;
+    latitude?: number;
+    longitude?: number;
+  }) => {
+    loading.value = true;
+    errorMessage.value = null;
+
+    try {
+      const today = new Date().toISOString().split('T')[0];
+      const nowIso = new Date().toISOString();
+      const updatePayload: Record<string, any> = {
+        status: 'safe_at_base',
+        safe_at_base_time: nowIso,
+      };
+
+      if (params.transitNotes) {
+        updatePayload.transit_notes = params.transitNotes;
+      }
+      if (params.latitude !== undefined) {
+        updatePayload.safe_location_lat = params.latitude;
+      }
+      if (params.longitude !== undefined) {
+        updatePayload.safe_location_lng = params.longitude;
+      }
+
+      let targetLogId = params.logId;
+
+      if (!targetLogId && params.internId) {
+        if (activeShift.value && activeShift.value.intern_id === params.internId) {
+          targetLogId = activeShift.value.id;
+        } else {
+          const { data: existingLog } = await supabase
+            .from('attendance_logs')
+            .select('id')
+            .eq('intern_id', params.internId)
+            .eq('date', today)
+            .maybeSingle();
+
+          if (existingLog) {
+            targetLogId = existingLog.id;
+          }
+        }
+      }
+
+      if (!targetLogId) {
+        throw new Error('Walang nakitang aktibong attendance log para i-update.');
+      }
+
+      const { data, error } = await supabase
+        .from('attendance_logs')
+        .update(updatePayload)
+        .eq('id', targetLogId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      if (activeShift.value && activeShift.value.id === targetLogId) {
+        activeShift.value = data as AttendanceLog;
+      }
+
+      return data;
+    } catch (err: any) {
+      errorMessage.value = err.message || 'Nabigong kumpirmahin ang Safe at Base status.';
       throw err;
     } finally {
       loading.value = false;
@@ -181,6 +253,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
     hasCompletedShiftToday,
     fetchTodayShift,
     logAttendanceTime,
+    confirmSafeAtBase,
     fetchAttendanceHistory,
   };
 });
