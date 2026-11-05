@@ -6,10 +6,12 @@ import { useAuthStore } from '@/stores/auth';
 import { useAccomplishmentsStore } from '@/stores/accomplishments';
 import { useToast } from '@/composables/useToast';
 import { sendStatusEmail } from '@/lib/email';
+import { generateCivilServiceDtrHtml, type IndividualLogRecord } from '@/lib/exportUtils';
 import type { CompanySite } from '@/types';
 import OfficeGeofenceModal from '@/components/OfficeGeofenceModal.vue';
 import ProofViewerModal from '@/components/ProofViewerModal.vue';
 import ProfileSettingsModal from '@/components/ProfileSettingsModal.vue';
+import ReportPreviewModal from '@/components/ReportPreviewModal.vue';
 import TraiNextSpinner from '@/components/TraiNextSpinner.vue';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -30,7 +32,6 @@ let supervisorMap: L.Map | null = null;
 let supervisorSiteCircle: L.Circle | null = null;
 let supervisorSiteMarker: L.Marker | null = null;
 
-
 /**
  * Active Navigation Tab State ('overview' | 'reports' | 'trainees')
  */
@@ -47,14 +48,57 @@ const isSigningOut = ref(false);
 const isInitialLoading = ref(true);
 
 /**
- * Manual Data Synchronization Handler for Supervisor
+ * Pull-to-Refresh State Variables
+ */
+const touchStartY = ref(0);
+const pullDistance = ref(0);
+const isPulling = ref(false);
+const isRefreshing = ref(false);
+const MAX_PULL_HEIGHT = 80;
+
+const handleTouchStart = (e: TouchEvent) => {
+  if (window.scrollY === 0) {
+    touchStartY.value = e.touches[0].clientY;
+    isPulling.value = true;
+  }
+};
+
+const handleTouchMove = (e: TouchEvent) => {
+  if (!isPulling.value || isRefreshing.value) return;
+  const currentY = e.touches[0].clientY;
+  const diff = currentY - touchStartY.value;
+  if (diff > 0) {
+    pullDistance.value = Math.min(diff * 0.4, MAX_PULL_HEIGHT);
+  } else {
+    pullDistance.value = 0;
+  }
+};
+
+const handleTouchEnd = async () => {
+  if (!isPulling.value || isRefreshing.value) return;
+  isPulling.value = false;
+  if (pullDistance.value >= 50) {
+    isRefreshing.value = true;
+    try {
+      await loadAllData();
+      // Toast notification removed during refresh to prevent clutter
+    } catch (err: any) {
+      toast.error('Failed to sync data.', 'ERROR');
+    } finally {
+      isRefreshing.value = false;
+    }
+  }
+  pullDistance.value = 0;
+};
+
+/**
+ * Manual Data Synchronization Handler for Supervisor (Overall Master Sync)
  */
 const handleManualRefresh = async () => {
-  if (!authStore.user?.id) return;
   isInitialLoading.value = true;
   try {
-    await accomplishmentsStore.fetchSupervisorLogs(authStore.user.id);
-    toast.success('Data synchronized successfully.', 'REFRESHED');
+    await loadAllData();
+    // Toast notification removed during manual refresh to prevent clutter
   } catch (err: any) {
     toast.error('Failed to sync data.', 'ERROR');
   } finally {
@@ -79,6 +123,14 @@ const isReportReviewModalOpen = ref(false);
  */
 const selectedTraineeForReports = ref<any | null>(null);
 const isTraineeReportsModalOpen = ref(false);
+
+/**
+ * Document Preview & Audit Export State for DTR Audit
+ */
+const isReportPreviewOpen = ref(false);
+const previewHtml = ref('');
+const previewDocTitle = ref('');
+const isExportingDtr = ref<string | null>(null);
 
 /**
  * Proof Viewer Media State
@@ -330,6 +382,45 @@ const respondToIntern = async (linkId: string, status: 'approved' | 'rejected') 
 };
 
 /**
+ * Generates Individual Trainee DTR Audit File (Civil Service Form No. 48)
+ */
+const handleDtrAuditExport = async (link: any) => {
+  const internId = link.intern?.id;
+  const internName = link.intern?.full_name || 'Trainee';
+  if (!internId) return;
+
+  isExportingDtr.value = internId;
+  try {
+    const { data: logs, error } = await supabase
+      .from('attendance_logs')
+      .select('date, am_arrival, am_departure, pm_arrival, pm_departure, hours_rendered, under_time_hours, under_time_minutes, status, safe_at_base_time, transit_notes')
+      .eq('intern_id', internId)
+      .order('date', { ascending: false });
+
+    if (error) throw error;
+
+    const totalRendered = (logs || []).reduce((sum: number, l: any) => sum + (Number(l.hours_rendered) || 0), 0);
+
+    previewDocTitle.value = `Civil Service DTR Audit — ${internName}`;
+    previewHtml.value = generateCivilServiceDtrHtml({
+      internName: internName,
+      companyName: site.value?.company_name || 'Designated Training Agency',
+      supervisorName: authStore.user?.full_name || 'Assigned Supervisor',
+      contactNumber: link.intern?.contact_number,
+      coordinatorName: 'OJT Coordinator',
+      totalRendered: totalRendered,
+      logs: (logs || []) as IndividualLogRecord[],
+    });
+
+    isReportPreviewOpen.value = true;
+  } catch (err: any) {
+    toast.error(err.message || 'Failed to generate DTR audit.', 'AUDIT ERROR');
+  } finally {
+    isExportingDtr.value = null;
+  }
+};
+
+/**
  * Opens Report Review Modal for Individual Report
  */
 const openReportReview = (log: any) => {
@@ -477,7 +568,7 @@ const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: 
 };
 
 /**
- * Master Data Refetch Utility
+ * Master Data Refetch Utility (Overall App Sync)
  */
 const loadAllData = async () => {
   if (!authStore.user?.id) return;
@@ -501,7 +592,6 @@ onMounted(async () => {
     }
     await loadAllData();
 
-    // Auto-dismiss badge if starting directly on a specific tab
     if (activeMainTab.value === 'reports') {
       hasViewedReportsTab.value = true;
     } else if (activeMainTab.value === 'trainees') {
@@ -550,7 +640,35 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main class="trainext-page-shell pb-24">
+  <main 
+    class="trainext-page-shell pb-24 min-h-screen relative"
+    @touchstart="handleTouchStart"
+    @touchmove="handleTouchMove"
+    @touchend="handleTouchEnd"
+  >
+    <!-- PULL TO REFRESH INDICATOR -->
+    <div 
+      class="pull-refresh-indicator"
+      :style="{ height: `${pullDistance}px`, opacity: pullDistance > 10 ? 1 : 0 }"
+    >
+      <div class="flex items-center justify-center gap-2 text-xs text-[#00d9ff] font-mono py-2">
+        <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span>{{ pullDistance >= 50 ? 'Release to refresh system...' : 'Pull down to refresh system' }}</span>
+      </div>
+    </div>
+
+    <!-- REFRESHING OVERLAY SPINNER -->
+    <div v-if="isRefreshing" class="absolute top-2 left-0 right-0 z-50 flex justify-center pointer-events-none">
+      <div class="px-4 py-1.5 rounded-full bg-[#050811]/90 border border-cyan-500/40 text-[11px] text-[#00d9ff] font-mono shadow-lg backdrop-blur-md flex items-center gap-2">
+        <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span>Syncing entire system data...</span>
+      </div>
+    </div>
+
     <div class="trainext-bg-railway" aria-hidden="true"></div>
     <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
@@ -576,8 +694,8 @@ onUnmounted(() => {
           type="button" 
           @click="handleManualRefresh"
           class="header-action-btn flex items-center justify-center cursor-pointer transition-all"
-          title="Refresh Data"
-          aria-label="Refresh Data"
+          title="Refresh All Data"
+          aria-label="Refresh All Data"
         >
           <svg class="w-4 h-4 text-slate-300 hover:text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -623,7 +741,7 @@ onUnmounted(() => {
             </span>
             <div class="flex items-baseline gap-2 mt-1">
               <span class="text-2xl sm:text-3xl font-extrabold text-white">{{ approvedInterns.length }}</span>
-              <span class="text-xs text-[#858994] font-medium">interns active under supervision</span>
+              <span class="text-xs text-[#858994] font-medium">active interns under supervision</span>
             </div>
           </div>
 
@@ -633,18 +751,33 @@ onUnmounted(() => {
             </span>
             <div class="flex items-baseline gap-2 mt-1">
               <span class="text-2xl sm:text-3xl font-extrabold text-[#00d9ff] font-mono">{{ pendingCount }}</span>
-              <span class="text-xs text-[#858994] font-medium">reports awaiting supervisor action</span>
+              <span class="text-xs text-[#858994] font-medium">reports awaiting action</span>
             </div>
           </div>
         </section>
 
         <!-- GEOFENCE OFFICE SITE CARD WITH LEAFLET MINI-MAP -->
         <section class="trainext-glass-card flex flex-col gap-3.5 p-4 sm:p-5">
-          <div>
-            <p class="text-xs sm:text-[13px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
-              Office Site Geofence Perimeter
-            </p>
-            <p class="trainext-subtitle text-[11px] mt-0.5">Authorized coordinates and allowed radius boundary for trainee check-ins.</p>
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <p class="text-xs sm:text-[13px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
+                Office Geofence Perimeter
+              </p>
+              <p class="trainext-subtitle text-[11px] mt-0.5">Authorized coordinates and allowed radius for trainee check-in.</p>
+            </div>
+            
+            <!-- CURRENT GPS BUTTON -->
+            <button 
+              type="button"
+              @click="isGeofenceModalOpen = true"
+              class="pill-cyan-btn cursor-pointer whitespace-nowrap self-start sm:self-auto"
+            >
+              <svg class="w-3.5 h-3.5 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <span>Use Current GPS / Edit</span>
+            </button>
           </div>
 
           <div v-if="loadingSite" class="p-6 text-center text-xs text-[#858994] font-mono">
@@ -660,18 +793,6 @@ onUnmounted(() => {
                 </div>
                 <p class="text-xs text-slate-300 truncate mt-0.5 font-mono">{{ site.office_address }}</p>
               </div>
-
-              <button 
-                type="button" 
-                @click="isGeofenceModalOpen = true"
-                class="pill-cyan-btn shrink-0 cursor-pointer whitespace-nowrap"
-              >
-                <svg class="w-3.5 h-3.5 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                <span>Edit Perimeter</span>
-              </button>
             </div>
 
             <!-- LEAFLET GEOFENCE MINI MAP -->
@@ -685,7 +806,7 @@ onUnmounted(() => {
           </div>
 
           <div v-else class="p-6 rounded-2xl border border-dashed border-white/20 text-center flex flex-col items-center gap-3">
-            <p class="text-xs text-[#858994]">No office geofence configured yet. Trainees will not be able to clock in until perimeter is set.</p>
+            <p class="text-xs text-[#858994]">No office geofence configured yet. Trainees cannot clock in until this is established.</p>
             <button 
               type="button" 
               @click="isGeofenceModalOpen = true"
@@ -706,7 +827,7 @@ onUnmounted(() => {
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 class="trainext-title text-sm sm:text-base">Trainee Accomplishment Reports</h2>
-              <p class="trainext-subtitle text-[11px]">Audit daily submissions and supervisor verification.</p>
+              <p class="trainext-subtitle text-[11px]">Review daily submissions and supervisor verifications.</p>
             </div>
 
             <!-- BATCH ACTION BUTTON -->
@@ -738,7 +859,7 @@ onUnmounted(() => {
             <input 
               v-model="searchQuery" 
               type="text" 
-              placeholder="Search reports by title, trainee name, or date..."
+              placeholder="Search by title, trainee name, or date..."
               class="search-reports-input pl-10 pr-4"
             />
             <button 
@@ -768,7 +889,7 @@ onUnmounted(() => {
           </nav>
 
           <div v-if="filteredLogs.length === 0" class="p-8 text-center text-xs text-[#858994] font-mono">
-            No reports found for '{{ searchQuery || activeFilter }}'.
+            No reports found matching '{{ searchQuery || activeFilter }}'.
           </div>
 
           <!-- COMPACT REPORT CARDS -->
@@ -789,13 +910,13 @@ onUnmounted(() => {
                   class="accent-[#00d9ff] cursor-pointer shrink-0"
                 />
 
-                <div class="min-w-0 flex-1">
-                  <p class="text-xs sm:text-sm font-semibold text-white group-hover:text-[#00d9ff] transition-colors truncate">
+                <div class="min-w-0 flex-1 text-left">
+                  <p class="text-xs sm:text-sm font-semibold text-white group-hover:text-[#00d9ff] transition-colors truncate text-left">
                     {{ log.title }}
                   </p>
                   
-                  <div class="flex items-center gap-2 text-[10.5px] text-[#858994] mt-0.5 font-mono">
-                    <span class="text-white font-medium truncate">{{ log.intern?.full_name || 'Trainee' }}</span>
+                  <div class="flex items-center gap-2 text-[10.5px] text-[#858994] mt-0.5 font-mono text-left">
+                    <span class="text-white font-medium truncate text-left">{{ log.intern?.full_name || 'Trainee' }}</span>
                     <span>•</span>
                     <span class="shrink-0">{{ log.report_date }}</span>
                   </div>
@@ -830,9 +951,9 @@ onUnmounted(() => {
           <div class="flex items-center justify-between gap-2">
             <div>
               <p class="text-xs sm:text-[13px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
-                Pending Affiliation Requests
+                Affiliation Requests
               </p>
-              <p class="trainext-subtitle text-[11px]">Trainees seeking supervision and geofence clearance.</p>
+              <p class="trainext-subtitle text-[11px]">Trainees requesting supervision and geofence clearance.</p>
             </div>
             <span class="trainext-chip chip-amber shrink-0 whitespace-nowrap">{{ pendingInterns.length }} Pending</span>
           </div>
@@ -847,9 +968,9 @@ onUnmounted(() => {
               :key="link.id"
               class="p-3.5 rounded-2xl bg-white/[0.02] border border-white/10 flex flex-row items-center justify-between gap-3"
             >
-              <div class="min-w-0 flex-1">
-                <p class="text-xs sm:text-sm font-bold text-white truncate">{{ link.intern?.full_name || 'Trainee' }}</p>
-                <p class="text-[11px] text-[#858994] font-mono mt-0.5 truncate">{{ link.intern?.email }}</p>
+              <div class="min-w-0 flex-1 text-left">
+                <p class="text-xs sm:text-sm font-bold text-white truncate text-left">{{ link.intern?.full_name || 'Trainee' }}</p>
+                <p class="text-[11px] text-[#858994] font-mono mt-0.5 truncate text-left">{{ link.intern?.email }}</p>
               </div>
 
               <div class="flex items-center gap-2 shrink-0">
@@ -876,41 +997,64 @@ onUnmounted(() => {
         <section class="trainext-glass-card flex flex-col gap-3.5 p-4 sm:p-5">
           <div>
             <p class="text-xs sm:text-[13px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
-              Active Supervised Trainees
+              Active Trainees Under Supervision
             </p>
-            <p class="trainext-subtitle text-[11px]">Click any trainee to view their individual submission logs and history.</p>
+            <p class="trainext-subtitle text-[11px]">View individual accomplishment reports and official DTR audit sheets.</p>
           </div>
 
           <div v-if="approvedInterns.length === 0" class="p-6 text-center text-xs text-[#858994] font-mono">
             No approved trainees linked yet.
           </div>
 
-          <div v-else class="flex flex-col gap-2 pt-1">
+          <div v-else class="flex flex-col gap-2.5 pt-1">
             <div 
               v-for="link in approvedInterns" 
               :key="link.id"
-              @click="openTraineeReports(link)"
-              class="report-item-card group cursor-pointer"
+              class="report-item-card group flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:p-4 text-left"
             >
-              <div class="flex items-center gap-3 min-w-0 flex-1">
+              <!-- LEFT: TRAINEE NAME & EMAIL -->
+              <div class="flex items-left gap-3 min-w-0 flex-1 text-left">
                 <div class="w-9 h-9 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-[#00d9ff] font-bold shrink-0">
                   {{ (link.intern?.full_name || 'T')[0] }}
                 </div>
-                <div class="min-w-0">
-                  <p class="text-xs sm:text-sm font-semibold text-white group-hover:text-[#00d9ff] transition-colors truncate">
+                <div class="min-w-0 text-left">
+                  <p class="text-xs sm:text-sm font-semibold text-white truncate text-left">
                     {{ link.intern?.full_name || 'Trainee' }}
                   </p>
-                  <p class="text-[11px] text-[#858994] font-mono truncate mt-0.5">
+                  <p class="text-[11px] text-[#858994] font-mono truncate mt-0.5 text-left">
                     {{ link.intern?.email }}
                   </p>
                 </div>
               </div>
 
-              <div class="flex items-center gap-2 shrink-0">
-                <span class="text-[10px] text-[#00d9ff] font-bold font-mono whitespace-nowrap">View Reports</span>
-                <svg class="w-4 h-4 text-slate-500 group-hover:text-white group-hover:translate-x-0.5 transition-all" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-                </svg>
+              <!-- RIGHT: VIEW REPORTS & DTR AUDIT -->
+              <div class="flex items-center justify-center sm:justify-end gap-2 w-full sm:w-auto pt-2 sm:pt-0 border-t border-white/5 sm:border-0 shrink-0">
+                <!-- View Reports Button -->
+                <button 
+                  type="button"
+                  @click="openTraineeReports(link)"
+                  class="pill-cyan-btn cursor-pointer whitespace-nowrap text-[10px] flex-1 sm:flex-none justify-center"
+                >
+                  <svg class="w-3.5 h-3.5 shrink-0 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span>View Reports</span>
+                </button>
+
+                <!-- DTR Audit Button -->
+                <button 
+                  type="button"
+                  @click="handleDtrAuditExport(link)"
+                  :disabled="isExportingDtr === link.intern?.id"
+                  class="pill-neutral-btn cursor-pointer whitespace-nowrap text-[10px] flex-1 sm:flex-none justify-center"
+                  title="View official Civil Service Form No. 48 DTR Audit"
+                >
+                  <div v-if="isExportingDtr === link.intern?.id" class="spinner-ring border-[#00d9ff]"></div>
+                  <svg v-else class="w-3.5 h-3.5 shrink-0 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span>DTR Audit</span>
+                </button>
               </div>
             </div>
           </div>
@@ -952,7 +1096,7 @@ onUnmounted(() => {
         >
           <div class="relative flex items-center justify-center">
             <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 01-2-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
             <span v-if="activeReportsBadgeCount > 0" class="nav-badge-count">
               {{ activeReportsBadgeCount > 99 ? '99+' : activeReportsBadgeCount }}
@@ -990,11 +1134,11 @@ onUnmounted(() => {
       <div class="w-full max-w-[560px] my-auto rounded-[24px] bg-[#050811]/95 border border-white/15 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         <!-- HEADER -->
         <header class="px-5 sm:px-6 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.015]">
-          <div class="min-w-0">
-            <p class="text-base sm:text-lg font-bold text-white truncate font-['Aileron',sans-serif]">
-              Report Verification &amp; Review
+          <div class="min-w-0 text-left">
+            <p class="text-base sm:text-lg font-bold text-white truncate font-['Aileron',sans-serif] text-left">
+              Report Verification & Review
             </p>
-            <p class="text-[10px] text-[#00d9ff] font-mono tracking-wider truncate">
+            <p class="text-[10px] text-[#00d9ff] font-mono tracking-wider truncate text-left">
               TRAINEE SUBMISSION AUDIT
             </p>
           </div>
@@ -1008,11 +1152,11 @@ onUnmounted(() => {
         </header>
 
         <!-- BODY -->
-        <div class="p-5 sm:p-6 flex flex-col gap-4 overflow-y-auto max-h-[calc(85vh-75px)]">
+        <div class="p-5 sm:p-6 flex flex-col gap-4 overflow-y-auto max-h-[calc(85vh-75px)] text-left">
           <div class="flex items-center justify-between gap-2 p-3 rounded-xl bg-white/[0.02] border border-white/10">
-            <div>
+            <div class="text-left">
               <span class="text-[9.5px] font-bold text-slate-400 uppercase font-['Aileron',sans-serif]">TRAINEE</span>
-              <p class="text-xs font-bold text-white">{{ selectedReportForReview.intern?.full_name || 'Trainee' }}</p>
+              <p class="text-xs font-bold text-white text-left">{{ selectedReportForReview.intern?.full_name || 'Trainee' }}</p>
             </div>
             <div class="text-right">
               <span class="text-[9.5px] font-bold text-slate-400 uppercase font-['Aileron',sans-serif]">SUBMISSION DATE</span>
@@ -1020,21 +1164,21 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div>
+          <div class="text-left">
             <span class="text-[9.5px] font-bold text-slate-400 uppercase font-['Aileron',sans-serif]">TASK / ACTIVITY</span>
-            <p class="text-sm font-bold text-white mt-0.5">{{ selectedReportForReview.title }}</p>
+            <p class="text-sm font-bold text-white mt-0.5 text-left">{{ selectedReportForReview.title }}</p>
           </div>
 
-          <div>
+          <div class="text-left">
             <span class="text-[9.5px] font-bold text-slate-400 uppercase font-['Aileron',sans-serif]">ACCOMPLISHMENT DETAILS</span>
-            <div class="p-3.5 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-200 leading-relaxed whitespace-pre-wrap mt-1">
+            <div class="p-3.5 rounded-xl bg-black/40 border border-white/10 text-xs text-slate-200 leading-relaxed whitespace-pre-wrap mt-1 text-left">
               {{ selectedReportForReview.description }}
             </div>
           </div>
 
           <!-- PROOF ATTACHMENTS STRIP -->
-          <div v-if="selectedReportForReview.proof_images?.length || selectedReportForReview.proof_documents?.length || selectedReportForReview.video_url" class="flex flex-col gap-2 pt-1">
-            <span class="text-[9.5px] font-bold text-slate-400 uppercase font-['Aileron',sans-serif]">ATTACHMENTS &amp; EVIDENCE</span>
+          <div v-if="selectedReportForReview.proof_images?.length || selectedReportForReview.proof_documents?.length || selectedReportForReview.video_url" class="flex flex-col gap-2 pt-1 text-left">
+            <span class="text-[9.5px] font-bold text-slate-400 uppercase font-['Aileron',sans-serif]">ATTACHED PROOF &amp; EVIDENCE</span>
             
             <div class="flex flex-wrap gap-2">
               <button 
@@ -1074,17 +1218,16 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- SUPERVISOR REMARKS INPUT (FOR PENDING) -->
-          <div v-if="selectedReportForReview.status === 'pending'" class="flex flex-col gap-1.5 pt-2 border-t border-white/10">
-            <span class="text-[9.5px] font-bold text-slate-400 uppercase font-['Aileron',sans-serif]">SUPERVISOR FEEDBACK REMARKS</span>
+          <!-- SUPERVISOR REMARKS INPUT -->
+          <div v-if="selectedReportForReview.status === 'pending'" class="flex flex-col gap-1.5 pt-2 border-t border-white/10 text-left">
+            <span class="text-[9.5px] font-bold text-slate-400 uppercase font-['Aileron',sans-serif]">SUPERVISOR REMARKS (FEEDBACK)</span>
             <textarea 
               v-model="modalFeedbackText" 
               rows="3" 
-              placeholder="Provide constructive feedback or state reason if rejecting..."
-              class="w-full p-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white placeholder:text-[#858994] outline-none focus:border-[#00d9ff] resize-none"
+              placeholder="Provide constructive feedback or rejection reason..."
+              class="w-full p-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white placeholder:text-[#858994] outline-none focus:border-[#00d9ff] resize-none text-left"
             ></textarea>
 
-            <!-- INDEPENDENT LOADING STATE BUTTONS -->
             <div class="flex items-center justify-end gap-2.5 pt-3">
               <button 
                 type="button"
@@ -1111,17 +1254,17 @@ onUnmounted(() => {
           <!-- ALREADY REVIEWED FEEDBACK -->
           <div 
             v-else-if="selectedReportForReview.feedback" 
-            class="p-3 rounded-xl border flex flex-col gap-1"
+            class="p-3 rounded-xl border flex flex-col gap-1 text-left"
             :class="selectedReportForReview.status === 'approved' 
               ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200' 
               : 'bg-rose-950/40 border-rose-500/40 text-rose-200'"
           >
-            <span class="text-[9px] font-bold uppercase tracking-wider font-mono"
+            <span class="text-[9px] font-bold uppercase tracking-wider font-mono text-left"
               :class="selectedReportForReview.status === 'approved' ? 'text-emerald-400' : 'text-rose-400'"
             >
               PREVIOUS SUPERVISOR REMARKS:
             </span>
-            <p class="text-xs leading-relaxed">{{ selectedReportForReview.feedback }}</p>
+            <p class="text-xs leading-relaxed text-left">{{ selectedReportForReview.feedback }}</p>
           </div>
         </div>
       </div>
@@ -1135,11 +1278,11 @@ onUnmounted(() => {
       <div class="w-full max-w-[600px] my-auto rounded-[24px] bg-[#050811]/95 border border-white/15 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         <!-- HEADER -->
         <header class="px-5 sm:px-6 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.015]">
-          <div>
-            <p class="text-sm sm:text-base font-bold text-white truncate font-['Aileron',sans-serif]">
-              {{ selectedTraineeForReports.intern?.full_name || 'Trainee' }}'s Submissions
+          <div class="text-left">
+            <p class="text-sm sm:text-base font-bold text-white truncate font-['Aileron',sans-serif] text-left">
+              Submissions by {{ selectedTraineeForReports.intern?.full_name || 'Trainee' }}
             </p>
-            <p class="text-[10px] text-[#00d9ff] font-mono tracking-wider truncate">
+            <p class="text-[10px] text-[#00d9ff] font-mono tracking-wider truncate text-left">
               TOTAL RECORDED REPORTS: {{ traineeSpecificLogs.length }}
             </p>
           </div>
@@ -1153,9 +1296,9 @@ onUnmounted(() => {
         </header>
 
         <!-- BODY LIST -->
-        <div class="p-5 sm:p-6 flex flex-col gap-2.5 overflow-y-auto max-h-[calc(80vh-75px)]">
+        <div class="p-5 sm:p-6 flex flex-col gap-2.5 overflow-y-auto max-h-[calc(80vh-75px)] text-left">
           <div v-if="traineeSpecificLogs.length === 0" class="p-8 text-center text-xs text-[#858994] font-mono">
-            No accomplishments recorded yet by this trainee.
+            No accomplishment entries recorded by this trainee yet.
           </div>
 
           <div 
@@ -1164,11 +1307,11 @@ onUnmounted(() => {
             @click="isTraineeReportsModalOpen = false; openReportReview(log);"
             class="report-item-card group cursor-pointer"
           >
-            <div class="min-w-0 flex-1">
-              <p class="text-xs sm:text-sm font-semibold text-white group-hover:text-[#00d9ff] transition-colors truncate">
+            <div class="min-w-0 flex-1 text-left">
+              <p class="text-xs sm:text-sm font-semibold text-white group-hover:text-[#00d9ff] transition-colors truncate text-left">
                 {{ log.title }}
               </p>
-              <div class="flex items-center gap-2 text-[10.5px] text-[#858994] mt-0.5 font-mono">
+              <div class="flex items-center gap-2 text-[10.5px] text-[#858994] mt-0.5 font-mono text-left">
                 <span>{{ log.report_date }}</span>
               </div>
             </div>
@@ -1199,15 +1342,15 @@ onUnmounted(() => {
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md"
     >
       <div class="trainext-glass-card max-w-sm w-full p-6 flex flex-col gap-4 border border-white/20 animate-in fade-in zoom-in-95 duration-150">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 text-left">
           <div class="w-10 h-10 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
             <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
             </svg>
           </div>
-          <div>
-            <h3 class="text-sm font-bold text-white">Confirm Sign Out</h3>
-            <p class="text-xs text-[#858994]">Are you sure you want to end your supervisor session?</p>
+          <div class="text-left">
+            <h3 class="text-sm font-bold text-white text-left">Confirm Sign Out</h3>
+            <p class="text-xs text-[#858994] text-left">Are you sure you want to end your supervisor session?</p>
           </div>
         </div>
 
@@ -1232,7 +1375,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- PROFILE, GEOFENCE & PROOF MODALS -->
+    <!-- PROFILE, GEOFENCE, PROOF & REPORT PREVIEW MODALS -->
     <ProfileSettingsModal 
       :is-open="isProfileSettingsOpen"
       @close="isProfileSettingsOpen = false"
@@ -1254,10 +1397,28 @@ onUnmounted(() => {
       :title="activeProofTitle"
       @close="isProofViewerOpen = false"
     />
+
+    <ReportPreviewModal
+      :is-open="isReportPreviewOpen"
+      :html-content="previewHtml"
+      :title="previewDocTitle"
+      @close="isReportPreviewOpen = false"
+    />
   </main>
 </template>
 
 <style scoped>
+/* PULL TO REFRESH STYLING */
+.pull-refresh-indicator {
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: height 150ms ease-out, opacity 150ms ease-out;
+  background: rgba(0, 217, 255, 0.03);
+  border-bottom: 1px solid rgba(0, 217, 255, 0.1);
+}
+
 /* STICKY HEADER */
 .sticky-supervisor-header {
   position: sticky !important;
@@ -1468,6 +1629,7 @@ onUnmounted(() => {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
+  gap: 6px !important;
   height: 34px !important;
   padding: 0 16px !important;
   border-radius: 9999px !important;

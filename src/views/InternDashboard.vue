@@ -7,6 +7,7 @@ import { useAttendanceStore } from '@/stores/attendance';
 import { useAccomplishmentsStore } from '@/stores/accomplishments';
 import { useGeolocation } from '@/composables/useGeolocation';
 import { useToast } from '@/composables/useToast';
+import { generateCivilServiceDtrHtml, type IndividualLogRecord } from '@/lib/exportUtils';
 import type { CompanySite } from '@/types';
 import AccomplishmentModal from '@/components/AccomplishmentModal.vue';
 import AccomplishmentDetailModal from '@/components/AccomplishmentDetailModal.vue';
@@ -14,6 +15,7 @@ import SafeAtBaseModal from '@/components/SafeAtBaseModal.vue';
 import GeofenceErrorModal from '@/components/GeofenceErrorModal.vue';
 import ProofViewerModal from '@/components/ProofViewerModal.vue';
 import ProfileSettingsModal from '@/components/ProfileSettingsModal.vue';
+import ReportPreviewModal from '@/components/ReportPreviewModal.vue';
 import TraiNextSpinner from '@/components/TraiNextSpinner.vue';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -32,25 +34,63 @@ const { coordinates, refreshLocation } = useGeolocation();
  * Global Leaflet Map & Realtime Subscriptions
  */
 let realtimeChannel: any = null;
-let liveTimerInterval: any = null;
 let internMap: L.Map | null = null;
 let internUserMarker: L.CircleMarker | null = null;
 let internSiteCircle: L.Circle | null = null;
 let internSiteMarker: L.Marker | null = null;
 
 /**
- * Manual Data Synchronization Handler for Mobile & Web
+ * Pull-to-Refresh State Variables
+ */
+const touchStartY = ref(0);
+const pullDistance = ref(0);
+const isPulling = ref(false);
+const isRefreshing = ref(false);
+const MAX_PULL_HEIGHT = 80;
+
+const handleTouchStart = (e: TouchEvent) => {
+  if (window.scrollY === 0) {
+    touchStartY.value = e.touches[0].clientY;
+    isPulling.value = true;
+  }
+};
+
+const handleTouchMove = (e: TouchEvent) => {
+  if (!isPulling.value || isRefreshing.value) return;
+  const currentY = e.touches[0].clientY;
+  const diff = currentY - touchStartY.value;
+  if (diff > 0) {
+    pullDistance.value = Math.min(diff * 0.4, MAX_PULL_HEIGHT);
+  } else {
+    pullDistance.value = 0;
+  }
+};
+
+const handleTouchEnd = async () => {
+  if (!isPulling.value || isRefreshing.value) return;
+  isPulling.value = false;
+  if (pullDistance.value >= 50) {
+    isRefreshing.value = true;
+    try {
+      await refreshData();
+      // Toast notification removed during refresh to prevent clutter
+    } catch (err: any) {
+      toast.error('Failed to sync data.', 'ERROR');
+    } finally {
+      isRefreshing.value = false;
+    }
+  }
+  pullDistance.value = 0;
+};
+
+/**
+ * Manual Data Synchronization Handler for Mobile & Web (Overall Master Sync)
  */
 const handleManualRefresh = async () => {
-  if (!authStore.user?.id) return;
   isInitialLoading.value = true;
   try {
-    await Promise.all([
-      attendanceStore.fetchTodayShift(authStore.user.id),
-      attendanceStore.fetchAttendanceHistory(authStore.user.id),
-      accomplishmentsStore.fetchInternLogs(authStore.user.id)
-    ]);
-    toast.success('Data synchronized successfully.', 'REFRESHED');
+    await refreshData();
+    // Toast notification removed during manual refresh to prevent clutter
   } catch (err: any) {
     toast.error('Failed to sync data.', 'ERROR');
   } finally {
@@ -80,6 +120,15 @@ const isDetailModalOpen = ref(false);
 const selectedLogForDetail = ref<any | null>(null);
 
 /**
+ * Document Preview & Audit Export State (DTR Audit & Safe Audit)
+ */
+const isReportPreviewOpen = ref(false);
+const previewHtml = ref('');
+const previewDocTitle = ref('');
+const isExportingDtr = ref(false);
+const isExportingSafeAudit = ref(false);
+
+/**
  * Proof Viewer Media State
  */
 const activeProofUrl = ref<string | null>(null);
@@ -106,11 +155,6 @@ const hasViewedReportsTab = ref(false);
  * Instant Click Visual Feedback State for Attendance Actions
  */
 const isVerifying = ref(false);
-
-/**
- * Live Stopwatch Timer State
- */
-const elapsedTimeText = ref('00h 00m 00s');
 
 /**
  * Accomplishment Reports Filters
@@ -154,17 +198,48 @@ const progressPercentage = computed(() => {
 });
 
 /**
- * Shift Status Helpers
+ * Shift Status Helpers (4-Time Entry System Support)
  */
 const currentShift = computed(() => attendanceStore.activeShift);
-const currentStatus = computed(() => attendanceStore.activeShift?.status || null);
+const hasAMIn = computed(() => !!currentShift.value?.am_arrival);
+const hasAMOut = computed(() => !!currentShift.value?.am_departure);
+const hasPMIn = computed(() => !!currentShift.value?.pm_arrival);
+const hasPMOut = computed(() => !!currentShift.value?.pm_departure);
 
-const currentStatusText = computed(() => {
-  if (currentStatus.value === 'on_duty') return 'On Duty';
-  if (currentStatus.value === 'in_transit') return 'In Transit';
-  if (currentStatus.value === 'safe_at_base') return 'Safe at Base';
-  return 'Not Clocked In';
+const currentShiftStatusText = computed(() => {
+  if (!hasAMIn.value) return 'Not Clocked In (AM In Pending)';
+  if (hasAMIn.value && !hasAMOut.value) return 'On Duty (AM Shift)';
+  if (hasAMOut.value && !hasPMIn.value) return 'Lunch Break / Out';
+  if (hasPMIn.value && !hasPMOut.value) return 'On Duty (PM Shift)';
+  return 'Shift Completed Today';
 });
+
+/**
+ * Helper to Format Timestamp into hrs:mins AM/PM (No seconds)
+ */
+const formatTimeToHoursMinutes = (timestamp: string | null) => {
+  if (!timestamp) return 'Not Confirmed';
+  try {
+    if (timestamp.includes(':')) {
+      const parts = timestamp.split(':');
+      if (parts.length >= 2) {
+        let hours = parseInt(parts[0], 10);
+        const minutes = parts[1];
+        const ampm = hours >= 12 ? 'PM' : 'AM';
+        hours = hours % 12;
+        hours = hours ? hours : 12;
+        return `${hours}:${minutes} ${ampm}`;
+      }
+    }
+    const date = new Date(timestamp);
+    if (!isNaN(date.getTime())) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    }
+    return timestamp;
+  } catch {
+    return timestamp;
+  }
+};
 
 /**
  * Dynamic Notification Badge Counter for Reports Tab
@@ -206,22 +281,6 @@ const filteredAccomplishments = computed(() => {
   }
   return list;
 });
-
-/**
- * Live Stopwatch Tick Updater for Active Shift
- */
-const updateLiveTimer = () => {
-  if (currentStatus.value === 'on_duty' && currentShift.value?.time_in) {
-    const diffMs = Math.max(0, new Date().getTime() - new Date(currentShift.value.time_in).getTime());
-    const totalSecs = Math.floor(diffMs / 1000);
-    const hrs = String(Math.floor(totalSecs / 3600)).padStart(2, '0');
-    const mins = String(Math.floor((totalSecs % 3600) / 60)).padStart(2, '0');
-    const secs = String(totalSecs % 60).padStart(2, '0');
-    elapsedTimeText.value = `${hrs}h ${mins}m ${secs}s`;
-  } else {
-    elapsedTimeText.value = '00h 00m 00s';
-  }
-};
 
 /**
  * Renders and Updates Leaflet Geofence Mini-Map for Trainees
@@ -398,6 +457,82 @@ const requestAffiliation = async () => {
 };
 
 /**
+ * Generates Civil Service Form No. 48 DTR Audit Preview
+ */
+const handleViewDtrAudit = async () => {
+  if (!authStore.user?.id) return;
+  isExportingDtr.value = true;
+  try {
+    const logs = attendanceStore.attendanceHistory || [];
+    const totalRendered = renderedHours.value;
+
+    previewDocTitle.value = `DTR Audit — ${authStore.user.full_name || 'Intern'}`;
+    previewHtml.value = generateCivilServiceDtrHtml({
+      internName: authStore.user.full_name || 'Intern Trainee',
+      companyName: supervisorSite.value?.company_name || 'Designated Training Agency',
+      supervisorName: supervisorInfo.value?.full_name || 'Assigned Supervisor',
+      contactNumber: (authStore.user as any)?.contact_number,
+      coordinatorName: 'OJT Coordinator',
+      totalRendered: totalRendered,
+      logs: logs as IndividualLogRecord[],
+    });
+
+    isReportPreviewOpen.value = true;
+  } catch (err: any) {
+    toast.error(err.message || 'Failed to generate DTR audit.', 'AUDIT ERROR');
+  } finally {
+    isExportingDtr.value = false;
+  }
+};
+
+/**
+ * Generates Safe Audit Summary Preview with formatted hrs:mins AM/PM time
+ */
+const handleViewSafeAudit = async () => {
+  if (!authStore.user?.id) return;
+  isExportingSafeAudit.value = true;
+  try {
+    const logs = attendanceStore.attendanceHistory || [];
+    const safeLogsCount = logs.filter((l: any) => l.safe_at_base_time).length;
+
+    previewDocTitle.value = `Safe Audit Log — ${authStore.user.full_name || 'Intern'}`;
+    previewHtml.value = `
+      <div style="font-family: Arial, sans-serif; padding: 20px; color: #333; background: #ffffff;">
+        <h2 style="text-align: center; color: #0588cc;">TraiNext Safe-At-Base Audit Log</h2>
+        <p><strong>Trainee:</strong> ${authStore.user.full_name || 'Intern Trainee'}</p>
+        <p><strong>Company:</strong> ${supervisorSite.value?.company_name || 'Designated Training Agency'}</p>
+        <p><strong>Total Safe Check-ins Recorded:</strong> ${safeLogsCount}</p>
+        <hr style="border: 1px solid #ddd; margin: 15px 0;" />
+        <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
+          <thead>
+            <tr style="background: #f2f2f2;">
+              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Date</th>
+              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Safe at Base Time</th>
+              <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Transit / Safety Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${logs.map((l: any) => `
+              <tr>
+                <td style="border: 1px solid #ddd; padding: 8px;">${l.date || '—'}</td>
+                <td style="border: 1px solid #ddd; padding: 8px;">${formatTimeToHoursMinutes(l.safe_at_base_time)}</td>
+                <td style="border: 1px solid #ddd; padding: 8px;">${l.transit_notes || 'Standard daily transit'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    isReportPreviewOpen.value = true;
+  } catch (err: any) {
+    toast.error(err.message || 'Failed to generate Safe audit.', 'AUDIT ERROR');
+  } finally {
+    isExportingSafeAudit.value = false;
+  }
+};
+
+/**
  * Computes Distance Between Two Coordinates via Haversine Formula
  */
 const computeDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
@@ -411,9 +546,9 @@ const computeDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: n
 };
 
 /**
- * Handles Clock In / Clock Out Attendance Verification
+ * Handles 4-Time Entry Attendance Actions (AM In, AM Out, PM In, PM Out)
  */
-const handleAttendanceAction = async () => {
+const handleTimeSlotAction = async (slot: 'am_arrival' | 'am_departure' | 'pm_arrival' | 'pm_departure') => {
   if (!authStore.user?.id || isVerifying.value || attendanceStore.loading) return;
 
   isVerifying.value = true;
@@ -446,17 +581,17 @@ const handleAttendanceAction = async () => {
       return;
     }
 
-    if (currentStatus.value === 'on_duty') {
-      await attendanceStore.logTimeOut({ internId: authStore.user.id, latitude: internLat, longitude: internLng });
-      toast.success('Successfully clocked out. Shift marked In Transit.', 'CLOCK OUT VERIFIED');
-    } else {
-      await attendanceStore.logTimeIn({ internId: authStore.user.id, latitude: internLat, longitude: internLng });
-      toast.success('Successfully clocked in within office perimeter.', 'CLOCK IN VERIFIED');
-    }
+    await attendanceStore.logAttendanceTime({
+      internId: authStore.user.id,
+      slot: slot,
+      latitude: internLat,
+      longitude: internLng
+    });
 
+    toast.success(`Successfully recorded ${slot.replace('_', ' ').toUpperCase()}.`, 'ATTENDANCE VERIFIED');
     await refreshData();
   } catch (err: any) {
-    toast.error(err.message || 'Failed to verify location.', 'ATTENDANCE ERROR');
+    toast.error(err.message || 'Failed to record attendance slot.', 'ATTENDANCE ERROR');
   } finally {
     isVerifying.value = false;
   }
@@ -499,7 +634,7 @@ const handleSignOut = async () => {
 };
 
 /**
- * Master Data Refetch Utility
+ * Master Data Refetch Utility (Overall App Sync)
  */
 const refreshData = async () => {
   if (!authStore.user?.id) return;
@@ -536,8 +671,6 @@ onMounted(async () => {
     }
     await refreshData();
     await refreshLocation();
-
-    liveTimerInterval = setInterval(updateLiveTimer, 1000);
 
     if (authStore.user?.id) {
       accomplishmentsStore.subscribeToRealtime(authStore.user.id, 'intern');
@@ -583,7 +716,6 @@ onMounted(async () => {
  * Lifecycle Hook: Unmounting & Cleanup
  */
 onUnmounted(() => {
-  if (liveTimerInterval) clearInterval(liveTimerInterval);
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   accomplishmentsStore.unsubscribeRealtime();
   if (internMap) {
@@ -594,7 +726,35 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main class="trainext-page-shell pb-24">
+  <main 
+    class="trainext-page-shell pb-24 min-h-screen relative"
+    @touchstart="handleTouchStart"
+    @touchmove="handleTouchMove"
+    @touchend="handleTouchEnd"
+  >
+    <!-- PULL TO REFRESH INDICATOR -->
+    <div 
+      class="pull-refresh-indicator"
+      :style="{ height: `${pullDistance}px`, opacity: pullDistance > 10 ? 1 : 0 }"
+    >
+      <div class="flex items-center justify-center gap-2 text-xs text-[#00d9ff] font-mono py-2">
+        <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span>{{ pullDistance >= 50 ? 'Release to refresh system...' : 'Pull down to refresh system' }}</span>
+      </div>
+    </div>
+
+    <!-- REFRESHING OVERLAY SPINNER -->
+    <div v-if="isRefreshing" class="absolute top-2 left-0 right-0 z-50 flex justify-center pointer-events-none">
+      <div class="px-4 py-1.5 rounded-full bg-[#050811]/90 border border-cyan-500/40 text-[11px] text-[#00d9ff] font-mono shadow-lg backdrop-blur-md flex items-center gap-2">
+        <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span>Syncing entire system data...</span>
+      </div>
+    </div>
+
     <div class="trainext-bg-railway" aria-hidden="true"></div>
     <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
@@ -615,13 +775,13 @@ onUnmounted(() => {
       </div>
 
       <div class="flex items-center gap-2 shrink-0">
-        <!-- REFRESH BUTTON -->
+        <!-- REFRESH BUTTON (Overall App Sync) -->
         <button 
           type="button" 
           @click="handleManualRefresh"
           class="header-action-btn flex items-center justify-center cursor-pointer transition-all"
-          title="Refresh Data"
-          aria-label="Refresh Data"
+          title="Refresh All Data"
+          aria-label="Refresh All Data"
         >
           <svg class="w-4 h-4 text-slate-300 hover:text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -718,7 +878,7 @@ onUnmounted(() => {
           </div>
         </section>
 
-        <!-- OFFICE PERIMETER & SHIFT STATUS ROW -->
+        <!-- OFFICE PERIMETER & 4-TIME ENTRY ATTENDANCE PANEL -->
         <section class="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
           <!-- OFFICE PERIMETER -->
           <div class="trainext-glass-card flex flex-col justify-between gap-1 p-4 sm:p-5">
@@ -751,97 +911,79 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- CURRENT SHIFT STATUS & ACTION PANEL -->
+          <!-- 4-TIME ENTRY ATTENDANCE PANEL -->
           <div class="trainext-glass-card flex flex-col justify-between gap-3 p-4 sm:p-5">
             <div>
               <span class="text-xs sm:text-[12px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
-                CURRENT SHIFT STATUS
+                DAILY ATTENDANCE LOG
               </span>
-              <div class="mt-2 flex flex-wrap items-center gap-1.5">
-                <span 
-                  class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-bold uppercase tracking-wider"
-                  :class="{
-                    'border border-[#00d9ff]/50 bg-[#00d9ff]/10 text-white': currentStatus === 'on_duty',
-                    'border border-amber-500/50 bg-amber-500/10 text-amber-300': currentStatus === 'in_transit',
-                    'border border-emerald-500/50 bg-emerald-500/10 text-emerald-300': currentStatus === 'safe_at_base',
-                    'border border-white/20 bg-white/5 text-[#858994]': !currentStatus
-                  }"
-                >
-                  <span class="w-2 h-2 rounded-full" :class="{
-                    'bg-[#00d9ff] shadow-[0_0_8px_#00d9ff]': currentStatus === 'on_duty',
-                    'bg-amber-400 shadow-[0_0_8px_#f59e0b]': currentStatus === 'in_transit',
-                    'bg-emerald-400': currentStatus === 'safe_at_base',
-                    'bg-[#858994]': !currentStatus
-                  }"></span>
-                  <span>{{ currentStatusText }}</span>
-                </span>
-
-                <div v-if="currentStatus === 'on_duty'" class="flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-xs font-mono font-bold text-[#00d9ff]">
-                  <span class="w-1.5 h-1.5 rounded-full bg-[#00d9ff] animate-ping"></span>
-                  <span>{{ elapsedTimeText }}</span>
-                </div>
-              </div>
+              <p class="text-[11px] text-[#858994] mt-0.5">{{ currentShiftStatusText }}</p>
             </div>
 
-            <!-- TIMESTAMPS ROW -->
+            <!-- 4 SLOTS STATUS GRID -->
             <div class="grid grid-cols-2 gap-2.5">
               <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
-                <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">TODAY IN</span>
+                <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">AM ARRIVAL</span>
                 <span class="text-xs font-bold text-white font-mono mt-0.5">
-                  {{ currentShift?.time_in ? new Date(currentShift.time_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—' }}
+                  {{ currentShift?.am_arrival || '—' }}
                 </span>
               </div>
               <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
-                <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">TODAY OUT</span>
+                <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">AM DEPARTURE</span>
                 <span class="text-xs font-bold text-white font-mono mt-0.5">
-                  {{ currentShift?.time_out ? new Date(currentShift.time_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—' }}
+                  {{ currentShift?.am_departure || '—' }}
+                </span>
+              </div>
+              <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
+                <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">PM ARRIVAL</span>
+                <span class="text-xs font-bold text-white font-mono mt-0.5">
+                  {{ currentShift?.pm_arrival || '—' }}
+                </span>
+              </div>
+              <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
+                <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">PM DEPARTURE</span>
+                <span class="text-xs font-bold text-white font-mono mt-0.5">
+                  {{ currentShift?.pm_departure || '—' }}
                 </span>
               </div>
             </div>
 
-            <!-- ATTENDANCE BUTTON ACTIONS -->
-            <div class="pt-2 flex items-center justify-center w-full">
-              <!-- CLOCK IN -->
+            <!-- 4 ACTION BUTTONS FOR TIME SLOTS -->
+            <div class="grid grid-cols-2 gap-2 pt-1">
               <button 
                 type="button"
-                v-if="!currentStatus || currentStatus === 'safe_at_base'"
-                @click="handleAttendanceAction"
-                :disabled="isVerifying || attendanceStore.loading || internLinkStatus !== 'approved'"
-                class="attendance-pill-btn clock-in-pill-btn cursor-pointer"
+                @click="handleTimeSlotAction('am_arrival')"
+                :disabled="isVerifying || attendanceStore.loading || hasAMIn || internLinkStatus !== 'approved'"
+                class="attendance-slot-btn cursor-pointer"
               >
-                <div v-if="isVerifying || attendanceStore.loading" class="spinner-ring border-[#00d9ff]"></div>
-                <svg v-else class="w-4 h-4 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
-                </svg>
-                <span>{{ (isVerifying || attendanceStore.loading) ? 'VERIFYING GPS...' : 'CLOCK IN' }}</span>
+                <span>AM IN</span>
               </button>
 
-              <!-- CLOCK OUT -->
               <button 
                 type="button"
-                v-else-if="currentStatus === 'on_duty'"
-                @click="handleAttendanceAction"
-                :disabled="isVerifying || attendanceStore.loading || internLinkStatus !== 'approved'"
-                class="attendance-pill-btn clock-out-pill-btn cursor-pointer"
+                @click="handleTimeSlotAction('am_departure')"
+                :disabled="isVerifying || attendanceStore.loading || !hasAMIn || hasAMOut || internLinkStatus !== 'approved'"
+                class="attendance-slot-btn cursor-pointer"
               >
-                <div v-if="isVerifying || attendanceStore.loading" class="spinner-ring border-rose-400"></div>
-                <svg v-else class="w-4 h-4 text-rose-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                </svg>
-                <span>{{ (isVerifying || attendanceStore.loading) ? 'VERIFYING GPS...' : 'CLOCK OUT' }}</span>
+                <span>AM OUT</span>
               </button>
 
-              <!-- I AM SAFE AT BASE -->
               <button 
                 type="button"
-                v-else-if="currentStatus === 'in_transit'"
-                @click="isSafeAtBaseModalOpen = true"
-                class="attendance-pill-btn safe-base-pill-btn cursor-pointer"
+                @click="handleTimeSlotAction('pm_arrival')"
+                :disabled="isVerifying || attendanceStore.loading || !hasAMOut || hasPMIn || internLinkStatus !== 'approved'"
+                class="attendance-slot-btn cursor-pointer"
               >
-                <svg class="w-4 h-4 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                </svg>
-                <span>I AM SAFE AT BASE</span>
+                <span>PM IN</span>
+              </button>
+
+              <button 
+                type="button"
+                @click="handleTimeSlotAction('pm_departure')"
+                :disabled="isVerifying || attendanceStore.loading || !hasPMIn || hasPMOut || internLinkStatus !== 'approved'"
+                class="attendance-slot-btn cursor-pointer"
+              >
+                <span>PM OUT</span>
               </button>
             </div>
           </div>
@@ -959,9 +1101,42 @@ onUnmounted(() => {
       <!-- ================= TAB 3: ATTENDANCE TAB ================= -->
       <div v-show="activeMainTab === 'attendance'" class="tab-pane-container">
         <section class="trainext-glass-card flex flex-col gap-4 p-4 sm:p-5">
-          <div>
-            <h2 class="trainext-title">Attendance Shift Records</h2>
-            <p class="trainext-subtitle text-[11px]">Audit trail of all previous check-ins, transit clearances, and verified rendered hours.</p>
+          <!-- HEADER WITH VIEW DTR AUDIT & VIEW SAFE AUDIT BUTTONS IN PINAKANG TAAS -->
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
+            <div>
+              <h2 class="trainext-title text-sm sm:text-base">Attendance Shift Records (CSC Format)</h2>
+              <p class="trainext-subtitle text-[11px]">Audit trail of all 4-time entry check-ins and rendered hours.</p>
+            </div>
+
+            <div class="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+              <!-- View DTR Audit Button -->
+              <button 
+                type="button" 
+                @click="handleViewDtrAudit"
+                :disabled="isExportingDtr"
+                class="new-report-pill-btn cursor-pointer text-xs h-[34px] px-4 flex items-center gap-1.5"
+              >
+                <div v-if="isExportingDtr" class="spinner-ring border-[#00d9ff]"></div>
+                <svg v-else class="w-3.5 h-3.5 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>View DTR Audit</span>
+              </button>
+
+              <!-- View Safe Audit Button -->
+              <button 
+                type="button" 
+                @click="handleViewSafeAudit"
+                :disabled="isExportingSafeAudit"
+                class="safe-audit-pill-btn cursor-pointer text-xs h-[34px] px-4 flex items-center gap-1.5"
+              >
+                <div v-if="isExportingSafeAudit" class="spinner-ring border-emerald-400"></div>
+                <svg v-else class="w-3.5 h-3.5 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+                <span>View Safe Audit</span>
+              </button>
+            </div>
           </div>
 
           <div v-if="attendanceStore.attendanceHistory.length === 0" class="p-8 text-center text-xs text-[#858994] font-mono">
@@ -977,24 +1152,16 @@ onUnmounted(() => {
               <div>
                 <div class="flex items-center gap-2">
                   <span class="font-mono text-xs font-bold text-white">{{ hist.date }}</span>
-                  <span 
-                    class="trainext-chip text-[10px]"
-                    :class="{
-                      'chip-cyan': hist.status === 'on_duty',
-                      'chip-amber': hist.status === 'in_transit',
-                      'chip-emerald': hist.status === 'safe_at_base'
-                    }"
-                  >
-                    {{ String(hist.status).replace(/_/g, ' ') }}
-                  </span>
                 </div>
 
-                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#858994] mt-1 font-mono">
-                  <span>In: {{ hist.time_in ? new Date(hist.time_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—' }}</span>
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-[#858994] mt-1 font-mono">
+                  <span>AM In: {{ hist.am_arrival || '—' }}</span>
                   <span>•</span>
-                  <span>Out: {{ hist.time_out ? new Date(hist.time_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—' }}</span>
-                  <span v-if="(hist as any).safe_at_base_time">•</span>
-                  <span v-if="(hist as any).safe_at_base_time" class="text-emerald-400">Safe: {{ new Date((hist as any).safe_at_base_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+                  <span>AM Out: {{ hist.am_departure || '—' }}</span>
+                  <span>•</span>
+                  <span>PM In: {{ hist.pm_arrival || '—' }}</span>
+                  <span>•</span>
+                  <span>PM Out: {{ hist.pm_departure || '—' }}</span>
                 </div>
               </div>
 
@@ -1154,12 +1321,30 @@ onUnmounted(() => {
       :formatted-distance="geofenceError.formattedDistance"
       :allowed-radius="geofenceError.allowedRadius"
       @close="geofenceError.isOpen = false"
-      @retry="geofenceError.isOpen = false; handleAttendanceAction();"
+      @retry="geofenceError.isOpen = false;"
+    />
+
+    <ReportPreviewModal
+      :is-open="isReportPreviewOpen"
+      :html-content="previewHtml"
+      :title="previewDocTitle"
+      @close="isReportPreviewOpen = false"
     />
   </main>
 </template>
 
 <style scoped>
+/* PULL TO REFRESH STYLING */
+.pull-refresh-indicator {
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: height 150ms ease-out, opacity 150ms ease-out;
+  background: rgba(0, 217, 255, 0.03);
+  border-bottom: 1px solid rgba(0, 217, 255, 0.1);
+}
+
 /* STICKY HEADER */
 .sticky-intern-header {
   position: sticky !important;
@@ -1258,108 +1443,82 @@ onUnmounted(() => {
   filter: grayscale(0.5) !important;
 }
 
-/* ATTENDANCE PILL CONTROLS */
-.attendance-pill-btn {
+/* SAFE AUDIT PILL BUTTON */
+.safe-audit-pill-btn {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  gap: 8px !important;
-  height: 44px !important;
-  min-width: 170px !important;
-  padding: 0 32px !important;
+  gap: 6px !important;
+  height: 34px !important;
+  padding: 0 16px !important;
   border-radius: 9999px !important;
-  touch-action: manipulation;
+  border: 1px solid rgba(52, 211, 153, 0.45) !important;
+  background: rgba(52, 211, 153, 0.1) !important;
+  color: #34d399 !important;
   font-family: "Aileron", -apple-system, sans-serif !important;
-  font-size: 12px !important;
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.3px !important;
+  cursor: pointer !important;
+  user-select: none !important;
+  box-shadow: 0 0 12px rgba(52, 211, 153, 0.15) !important;
+  transition: all 160ms ease !important;
+}
+
+.safe-audit-pill-btn:hover:not(:disabled) {
+  background: rgba(52, 211, 153, 0.22) !important;
+  border-color: rgba(52, 211, 153, 0.8) !important;
+  color: #ffffff !important;
+  box-shadow: 0 0 16px rgba(52, 211, 153, 0.35) !important;
+  transform: translateY(-1px) !important;
+}
+
+.safe-audit-pill-btn:active:not(:disabled) {
+  transform: scale(0.96) !important;
+}
+
+.safe-audit-pill-btn:disabled {
+  opacity: 0.45 !important;
+  cursor: not-allowed !important;
+  filter: grayscale(0.5) !important;
+}
+
+/* ATTENDANCE 4-SLOT BUTTONS */
+.attendance-slot-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 42px !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(0, 217, 255, 0.4) !important;
+  background: rgba(0, 217, 255, 0.1) !important;
+  color: #00d9ff !important;
+  font-family: "Aileron", -apple-system, sans-serif !important;
+  font-size: 11px !important;
   font-weight: 700 !important;
   letter-spacing: 0.5px !important;
-  user-select: none !important;
   cursor: pointer !important;
-  transition: transform 120ms ease, background 160ms ease, border-color 160ms ease !important;
+  transition: all 160ms ease !important;
+  user-select: none !important;
 }
 
-/* CLOCK IN: NEON CYAN */
-.clock-in-pill-btn {
-  border: 1px solid rgba(0, 217, 255, 0.5) !important;
-  background: rgba(0, 217, 255, 0.12) !important;
-  color: #00d9ff !important;
-  box-shadow: 0 0 15px rgba(0, 217, 255, 0.2) !important;
-}
-
-.clock-in-pill-btn:hover:not(:disabled) {
-  background: rgba(0, 217, 255, 0.25) !important;
-  border-color: rgba(0, 217, 255, 0.85) !important;
+.attendance-slot-btn:hover:not(:disabled) {
+  background: rgba(0, 217, 255, 0.22) !important;
+  border-color: rgba(0, 217, 255, 0.8) !important;
   color: #ffffff !important;
-  box-shadow: 0 0 20px rgba(0, 217, 255, 0.4) !important;
+  box-shadow: 0 0 14px rgba(0, 217, 255, 0.3) !important;
   transform: translateY(-1px) !important;
 }
 
-.clock-in-pill-btn:active:not(:disabled) {
-  transform: scale(0.95) !important;
+.attendance-slot-btn:active:not(:disabled) {
+  transform: scale(0.96) !important;
 }
 
-/* CLOCK OUT: NEON RED / ROSE ALERT */
-.clock-out-pill-btn {
-  border: 1px solid rgba(244, 63, 94, 0.55) !important;
-  background: rgba(244, 63, 94, 0.15) !important;
-  color: #fca5a5 !important;
-  box-shadow: 0 0 15px rgba(244, 63, 94, 0.2) !important;
-}
-
-.clock-out-pill-btn:hover:not(:disabled) {
-  background: rgba(244, 63, 94, 0.3) !important;
-  border-color: rgba(244, 63, 94, 0.9) !important;
-  color: #ffffff !important;
-  box-shadow: 0 0 22px rgba(244, 63, 94, 0.45) !important;
-  transform: translateY(-1px) !important;
-}
-
-.clock-out-pill-btn:active:not(:disabled) {
-  transform: scale(0.95) !important;
-}
-
-/* SAFE AT BASE: EMERALD GREEN */
-.safe-base-pill-btn {
-  border: 1px solid rgba(52, 211, 153, 0.55) !important;
-  background: rgba(5, 46, 30, 0.7) !important;
-  color: #6ee7b7 !important;
-  box-shadow: 0 0 15px rgba(52, 211, 153, 0.2) !important;
-}
-
-.safe-base-pill-btn:hover:not(:disabled) {
-  background: rgba(6, 78, 59, 0.85) !important;
-  border-color: rgba(52, 211, 153, 0.9) !important;
-  color: #ffffff !important;
-  box-shadow: 0 0 22px rgba(52, 211, 153, 0.45) !important;
-  transform: translateY(-1px) !important;
-}
-
-.safe-base-pill-btn:active:not(:disabled) {
-  transform: scale(0.95) !important;
-}
-
-.attendance-pill-btn:disabled {
-  opacity: 0.55 !important;
+.attendance-slot-btn:disabled {
+  opacity: 0.4 !important;
   cursor: not-allowed !important;
-  filter: grayscale(0.4) !important;
+  filter: grayscale(0.5) !important;
   transform: none !important;
-}
-
-/* INLINE SPINNER RING */
-.spinner-ring {
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  border-width: 2px;
-  border-style: solid;
-  border-top-color: transparent !important;
-  animation: spin 0.75s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* MODAL SIGN OUT BUTTON */

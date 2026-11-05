@@ -18,6 +18,9 @@ const email = ref('');
 const password = ref('');
 const confirmPassword = ref('');
 
+// "Remember Me" State (Pinapanatili ang session sa localStorage kung naka-check)
+const rememberMe = ref(true);
+
 const showPassword = ref(false);
 const showConfirmPassword = ref(false);
 const loading = ref(false);
@@ -36,7 +39,6 @@ let authSubscription: Subscription | null = null;
  */
 const isValidEmail = (val: string): boolean => {
   const cleanEmail = val.trim();
-  // Standard RFC 5322 regex + TLD requirement (e.g. .com, .edu, .ph)
   const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
   return emailRegex.test(cleanEmail);
 };
@@ -101,7 +103,7 @@ onMounted(async () => {
   });
   authSubscription = data.subscription;
 
-  // 3. Fallback: Suriin kung may active cached session
+  // 3. Persistent Session Check (Hindi mag-a-auto logout kahit mag-back sa mobile app)
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.user && activeTab.value !== 'updatePassword') {
     await checkAndRouteUser();
@@ -131,6 +133,14 @@ const handleLogin = async () => {
   loading.value = true;
   try {
     await authStore.signIn(email.value.trim(), password.value);
+    
+    // Kung nakacheck ang Remember Me, tinitiyak natin ang persistence
+    if (rememberMe.value) {
+      localStorage.setItem('trainext_remember_login', 'true');
+    } else {
+      localStorage.removeItem('trainext_remember_login');
+    }
+
     if (authStore.user?.role) {
       routeByRole(authStore.user.role);
     }
@@ -150,7 +160,6 @@ const handleSignup = async () => {
     return;
   }
 
-  // Strict Email Validation
   if (!isValidEmail(email.value)) {
     errorMessage.value = 'Please enter a valid and existing email address (e.g. user@domain.com).';
     return;
@@ -302,7 +311,7 @@ const confirmGoogleRole = async () => {
       <!-- MAIN GLASS CARD -->
       <section class="glass-card" :class="{ 'signup-card': activeTab === 'signup' }">
         
-        <!-- TABS (Nakatago kapag nasa Forgot o Update Password flow) -->
+        <!-- TABS -->
         <nav v-if="activeTab === 'login' || activeTab === 'signup'" class="auth-tabs" aria-label="Authentication">
           <button
             type="button"
@@ -327,7 +336,7 @@ const confirmGoogleRole = async () => {
           </button>
         </nav>
 
-        <!-- CYBER-GLASS ALERTS & CONFIRMATION -->
+        <!-- ALERTS -->
         <div v-if="errorMessage" class="message message-error" role="alert">
           <svg class="message-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <circle cx="12" cy="12" r="10" stroke-width="2" />
@@ -404,8 +413,17 @@ const confirmGoogleRole = async () => {
               </div>
             </div>
 
-            <!-- Forgot Password -->
-            <div class="forgot-row">
+            <!-- REMEMBER ME & FORGOT PASSWORD ROW -->
+            <div class="flex items-center justify-between mt-2 mb-4">
+              <label class="flex items-center gap-2 cursor-pointer select-none">
+                <input 
+                  type="checkbox" 
+                  v-model="rememberMe"
+                  class="w-3.5 h-3.5 rounded border-white/30 bg-black/40 text-[#00d9ff] focus:ring-0 focus:ring-offset-0 cursor-accent"
+                />
+                <span class="text-[10px] font-semibold text-slate-300 tracking-wider font-['Aileron',sans-serif]">Remember Me</span>
+              </label>
+
               <button type="button" class="forgot-link" @click="switchTab('forgot')">FORGOT PASSWORD?</button>
             </div>
 
@@ -1072,7 +1090,6 @@ const confirmGoogleRole = async () => {
   border-bottom-color: var(--tx-cyan);
 }
 
-/* CYBER-GLASS DROPDOWN SELECT STYLING & PERFECT ARROW ALIGNMENT */
 select.trainext-select-glass,
 .auth-page select {
   appearance: none !important;
@@ -1136,13 +1153,6 @@ select.trainext-select-glass option,
 
 .field-login-password {
   margin-bottom: 0;
-}
-
-.forgot-row {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 6px;
-  margin-bottom: 18px;
 }
 
 .forgot-link {

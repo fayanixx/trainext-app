@@ -7,10 +7,10 @@ const { toasts, removeToast } = useToast();
 <template>
   <div class="fixed top-5 right-5 z-[99999] flex flex-col gap-2.5 max-w-[360px] w-full pointer-events-none px-3">
     <transition-group
-      enter-active-class="transform ease-out duration-300 transition"
+      enter-active-class="transform ease-out duration-200 transition"
       enter-from-class="translate-y-[-12px] opacity-0 scale-95"
       enter-to-class="translate-y-0 opacity-100 scale-100"
-      leave-active-class="transition ease-in duration-200"
+      leave-active-class="transition ease-in duration-100"
       leave-from-class="opacity-100 scale-100"
       leave-to-class="opacity-0 scale-90"
     >

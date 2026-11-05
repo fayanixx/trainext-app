@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { supabase } from '@/lib/supabase';
-import { calculateHoursRendered } from '@/lib/geofence';
 import type { AttendanceLog } from '@/types';
 
 export const useAttendanceStore = defineStore('attendance', () => {
@@ -14,17 +13,15 @@ export const useAttendanceStore = defineStore('attendance', () => {
   const errorMessage = ref<string | null>(null);
 
   /**
-   * Computed Session Statuses
+   * Computed Session Statuses para sa 4-Time Entry System
    */
-  const isOnDuty = computed(() => activeShift.value?.status === 'on_duty');
-  const isInTransit = computed(() => activeShift.value?.status === 'in_transit');
-  const isSafeAtBase = computed(() => activeShift.value?.status === 'safe_at_base');
+  const hasAMIn = computed(() => !!activeShift.value?.am_arrival);
+  const hasAMOut = computed(() => !!activeShift.value?.am_departure);
+  const hasPMIn = computed(() => !!activeShift.value?.pm_arrival);
+  const hasPMOut = computed(() => !!activeShift.value?.pm_departure);
+
   const hasCompletedShiftToday = computed(() => {
-    return (
-      activeShift.value?.time_out !== null &&
-      activeShift.value?.time_out !== undefined &&
-      !isInTransit.value
-    );
+    return hasAMIn.value && hasAMOut.value && hasPMIn.value && hasPMOut.value;
   });
 
   /**
@@ -60,158 +57,87 @@ export const useAttendanceStore = defineStore('attendance', () => {
   };
 
   /**
-   * Records geofenced Time-In via Database RPC with anti-spoofing validation
+   * Universal Time Logging para sa Apat na Time Slots (AM In, AM Out, PM In, PM Out)
    */
-  const logTimeIn = async (params: {
+  const logAttendanceTime = async (params: {
     internId: string;
-    latitude: number;
-    longitude: number;
-    supervisorId?: string;
-    siteId?: string;
+    slot: 'am_arrival' | 'am_departure' | 'pm_arrival' | 'pm_departure';
+    latitude?: number;
+    longitude?: number;
   }) => {
     loading.value = true;
     errorMessage.value = null;
 
     try {
-      // Invoke Database RPC Procedure for Geofence & Anti-Spoofing Checks
-      const { data, error } = await supabase.rpc('secure_clock_in', {
-        p_intern_id: params.internId,
-        p_latitude: params.latitude,
-        p_longitude: params.longitude,
-      });
+      const today = new Date().toISOString().split('T')[0];
+      const currentTimeIso = new Date().toTimeString().split(' ')[0]; // HH:MM:SS format para sa TIME column
 
-      if (error) throw error;
+      // Kung wala pang record ngayong araw at AM In ang kailangan, gumawa ng bagong row
+      if (!activeShift.value) {
+        if (params.slot !== 'am_arrival') {
+          throw new Error('Kailangan munang mag-Time In (AM Arrival) ngayong umaga.');
+        }
 
-      activeShift.value = data.log as AttendanceLog;
+        const insertPayload: Record<string, any> = {
+          intern_id: params.internId,
+          date: today,
+          am_arrival: currentTimeIso,
+          time_in_lat: params.latitude,
+          time_in_lng: params.longitude,
+        };
+
+        const { data, error } = await supabase
+          .from('attendance_logs')
+          .insert([insertPayload])
+          .select()
+          .single();
+
+        if (error) throw error;
+        activeShift.value = data as AttendanceLog;
+      } else {
+        // I-update ang umiiral na attendance log depende sa slot
+        const updatePayload: Record<string, any> = {};
+        
+        if (params.slot === 'am_arrival') {
+          if (activeShift.value.am_arrival) throw new Error('Mayroon nang AM Arrival record.');
+          updatePayload.am_arrival = currentTimeIso;
+        } else if (params.slot === 'am_departure') {
+          if (activeShift.value.am_departure) throw new Error('Mayroon nang AM Departure record.');
+          updatePayload.am_departure = currentTimeIso;
+        } else if (params.slot === 'pm_arrival') {
+          if (activeShift.value.pm_arrival) throw new Error('Mayroon nang PM Arrival record.');
+          updatePayload.pm_arrival = currentTimeIso;
+        } else if (params.slot === 'pm_departure') {
+          if (activeShift.value.pm_departure) throw new Error('Mayroon nang PM Departure record.');
+          updatePayload.pm_departure = currentTimeIso;
+          
+          // Kalkulahin din ang kabuuang oras o undertime kung kinakailangan dito
+        }
+
+        if (params.latitude !== undefined) {
+          if (params.slot === 'am_arrival') updatePayload.time_in_lat = params.latitude;
+          if (params.slot === 'pm_departure') updatePayload.time_out_lat = params.latitude;
+        }
+        if (params.longitude !== undefined) {
+          if (params.slot === 'am_arrival') updatePayload.time_in_lng = params.longitude;
+          if (params.slot === 'pm_departure') updatePayload.time_out_lng = params.longitude;
+        }
+
+        const { data, error } = await supabase
+          .from('attendance_logs')
+          .update(updatePayload)
+          .eq('id', activeShift.value.id)
+          .select()
+          .single();
+
+        if (error) throw error;
+        activeShift.value = data as AttendanceLog;
+      }
+
       await fetchAttendanceHistory(params.internId);
       return activeShift.value;
     } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to record Time In.';
-      throw err;
-    } finally {
-      loading.value = false;
-    }
-  };
-
-  /**
-   * Records Time-Out, computes total hours rendered, and transitions state to 'in_transit'
-   */
-  const logTimeOut = async (params?: {
-    internId?: string;
-    latitude?: number;
-    longitude?: number;
-  }) => {
-    if (!activeShift.value?.id) {
-      throw new Error('No active shift found to clock out from.');
-    }
-
-    loading.value = true;
-    errorMessage.value = null;
-
-    try {
-      const timeOutIso = new Date().toISOString();
-      let rendered = 0;
-
-      const startTime = activeShift.value.time_in;
-      if (typeof calculateHoursRendered === 'function' && startTime) {
-        rendered = calculateHoursRendered(startTime, timeOutIso);
-      } else if (startTime) {
-        const diffMs = new Date(timeOutIso).getTime() - new Date(startTime).getTime();
-        rendered = Math.max(0, parseFloat((diffMs / (1000 * 60 * 60)).toFixed(2)));
-      }
-
-      const updatePayload: Record<string, any> = {
-        time_out: timeOutIso,
-        hours_rendered: rendered,
-        status: 'in_transit',
-      };
-
-      if (params?.latitude !== undefined) {
-        updatePayload.time_out_lat = params.latitude;
-      }
-      if (params?.longitude !== undefined) {
-        updatePayload.time_out_lng = params.longitude;
-      }
-
-      const { data, error } = await supabase
-        .from('attendance_logs')
-        .update(updatePayload)
-        .eq('id', activeShift.value.id)
-        .select()
-        .single();
-
-      if (error) throw error;
-      activeShift.value = data as AttendanceLog;
-
-      const internId = params?.internId || activeShift.value.intern_id;
-      if (internId) {
-        await fetchAttendanceHistory(internId);
-      }
-
-      return activeShift.value;
-    } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to record Time Out.';
-      throw err;
-    } finally {
-      loading.value = false;
-    }
-  };
-
-  /**
-   * Confirms intern arrival at safe quarters and updates shift status to 'safe_at_base'
-   */
-  const confirmSafeAtBase = async (params?: {
-    logId?: string;
-    internId?: string;
-    latitude?: number;
-    longitude?: number;
-    transitNotes?: string;
-  }) => {
-    const targetLogId = params?.logId || activeShift.value?.id;
-    if (!targetLogId) {
-      throw new Error('No active transit record found.');
-    }
-
-    loading.value = true;
-    errorMessage.value = null;
-
-    try {
-      const safeTimeIso = new Date().toISOString();
-
-      const updatePayload: Record<string, any> = {
-        status: 'safe_at_base',
-        safe_at_base_time: safeTimeIso,
-        transit_waiver_agreed: true,
-      };
-
-      if (params?.latitude !== undefined) {
-        updatePayload.safe_location_lat = params.latitude;
-      }
-      if (params?.longitude !== undefined) {
-        updatePayload.safe_location_lng = params.longitude;
-      }
-      if (params?.transitNotes) {
-        updatePayload.transit_notes = params.transitNotes;
-      }
-
-      const { data, error } = await supabase
-        .from('attendance_logs')
-        .update(updatePayload)
-        .eq('id', targetLogId)
-        .select()
-        .single();
-
-      if (error) throw error;
-      activeShift.value = data as AttendanceLog;
-
-      const internId = params?.internId || activeShift.value.intern_id;
-      if (internId) {
-        await fetchAttendanceHistory(internId);
-      }
-
-      return activeShift.value;
-    } catch (err: any) {
-      errorMessage.value = err.message || 'Failed to record Safe at Base arrival.';
+      errorMessage.value = err.message || 'Nabigong maitala ang oras.';
       throw err;
     } finally {
       loading.value = false;
@@ -248,17 +174,13 @@ export const useAttendanceStore = defineStore('attendance', () => {
     attendanceHistory,
     loading,
     errorMessage,
-    isOnDuty,
-    isInTransit,
-    isSafeAtBase,
+    hasAMIn,
+    hasAMOut,
+    hasPMIn,
+    hasPMOut,
     hasCompletedShiftToday,
     fetchTodayShift,
-    logTimeIn,
-    timeIn: logTimeIn,
-    logTimeOut,
-    timeOut: logTimeOut,
-    confirmSafeAtBase,
-    markSafeAtBase: confirmSafeAtBase,
+    logAttendanceTime,
     fetchAttendanceHistory,
   };
 });

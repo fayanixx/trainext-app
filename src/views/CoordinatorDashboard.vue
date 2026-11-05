@@ -11,7 +11,8 @@ import { useToast } from '@/composables/useToast';
 import { 
   exportToCsv, 
   generateMasterReportHtml, 
-  generateIndividualDtrHtml,
+  generateCivilServiceDtrHtml,
+  generateSafetyAuditHtml,
   type IndividualLogRecord 
 } from '@/lib/exportUtils';
 
@@ -42,20 +43,61 @@ const isSigningOut = ref(false);
 const isInitialLoading = ref(true);
 
 /**
- * Manual Data Synchronization Handler for Coordinator
+ * Pull-to-Refresh State Variables
+ */
+const touchStartY = ref(0);
+const pullDistance = ref(0);
+const isPulling = ref(false);
+const isRefreshing = ref(false);
+const MAX_PULL_HEIGHT = 80;
+
+const handleTouchStart = (e: TouchEvent) => {
+  if (window.scrollY === 0) {
+    touchStartY.value = e.touches[0].clientY;
+    isPulling.value = true;
+  }
+};
+
+const handleTouchMove = (e: TouchEvent) => {
+  if (!isPulling.value || isRefreshing.value) return;
+  const currentY = e.touches[0].clientY;
+  const diff = currentY - touchStartY.value;
+  if (diff > 0) {
+    pullDistance.value = Math.min(diff * 0.4, MAX_PULL_HEIGHT);
+  } else {
+    pullDistance.value = 0;
+  }
+};
+
+const handleTouchEnd = async () => {
+  if (!isPulling.value || isRefreshing.value) return;
+  isPulling.value = false;
+  if (pullDistance.value >= 50) {
+    isRefreshing.value = true;
+    try {
+      await fetchMasterData();
+    } catch (err: any) {
+      toast.error('Failed to sync data.', 'ERROR');
+    } finally {
+      isRefreshing.value = false;
+    }
+  }
+  pullDistance.value = 0;
+};
+
+/**
+ * Manual Data Synchronization Handler for Coordinator (Overall Refresh)
  */
 const handleManualRefresh = async () => {
   isInitialLoading.value = true;
   try {
     await fetchMasterData();
-    toast.success('Data synchronized successfully.', 'REFRESHED');
   } catch (err: any) {
     toast.error('Failed to sync data.', 'ERROR');
   } finally {
     isInitialLoading.value = false;
   }
 };
-
 
 /**
  * Persistent Notification Badge State via LocalStorage
@@ -87,6 +129,7 @@ const isReportPreviewOpen = ref(false);
 const previewHtml = ref('');
 const previewDocTitle = ref('');
 const isExportingIndividual = ref<string | null>(null);
+const isExportingSafety = ref<string | null>(null);
 
 /**
  * Trainee Accomplishment Review Modal Controls
@@ -157,7 +200,6 @@ const activeInTransitBadgeCount = computed(() => {
 
 const activeReportsBadgeCount = computed(() => {
   const currentCount = allReviewedReports.value.length;
-  // Kukuha lang ng badge count kung may BAGO kaysa sa huling nakitang count
   const unreadDiff = currentCount - lastSeenPerformanceReportCount.value;
   return unreadDiff > 0 ? unreadDiff : 0;
 });
@@ -249,7 +291,7 @@ const currentTraineeReports = computed(() => {
 });
 
 /**
- * Fetches and Aggregates Master Data from Supabase
+ * Fetches and Aggregates Master Data from Supabase (Overall Master Sync)
  */
 const fetchMasterData = async () => {
   try {
@@ -300,7 +342,6 @@ const fetchMasterData = async () => {
     const attendance = attendanceRes.data || [];
     allReviewedReports.value = (reportsRes.data as AccomplishmentReportItem[]) || [];
 
-    // Kung nasa Performance Tab na ang user habang nagfe-fetch, i-update ang last seen count
     if (activeMainTab.value === 'performance') {
       lastSeenPerformanceReportCount.value = allReviewedReports.value.length;
       localStorage.setItem(STORAGE_KEY_PERF_COUNT, String(allReviewedReports.value.length));
@@ -363,7 +404,7 @@ const fetchMasterData = async () => {
     });
   } catch (err: any) {
     console.error('Failed to load coordinator data:', err.message);
-  } flex: {
+  } finally {
     isInitialLoading.value = false;
   }
 };
@@ -412,7 +453,7 @@ const handleMasterCSVExport = () => {
     'Rendered Hours': Number(i.total_hours || 0).toFixed(1),
     'Target Hours': '486.0',
     'OJT Status': i.is_ojt_completed ? 'COMPLETED (486h)' : 'IN PROGRESS',
-    'Today Shift Status': i.today_status.replace(/_/g, ' ').toUpperCase(),
+    'Safe at Base Compliance': i.today_status.replace(/_/g, ' ').toUpperCase(),
     'Approved Reports': i.approved_reports_count,
     'Rejected Reports': i.rejected_reports_count,
   }));
@@ -449,21 +490,21 @@ const handleMasterPDFExport = () => {
 };
 
 /**
- * Generates Individual Trainee DTR Audit File
+ * Generates Individual Trainee DTR Audit File (Civil Service Form No. 48)
  */
 const handleIndividualExport = async (intern: InternRecord) => {
   isExportingIndividual.value = intern.id;
   try {
     const { data: logs, error } = await supabase
       .from('attendance_logs')
-      .select('date, time_in, time_out, hours_rendered, status, safe_at_base_time, transit_notes')
+      .select('date, am_arrival, am_departure, pm_arrival, pm_departure, hours_rendered, under_time_hours, under_time_minutes, status, safe_at_base_time, transit_notes')
       .eq('intern_id', intern.id)
       .order('date', { ascending: false });
 
     if (error) throw error;
 
-    previewDocTitle.value = `DTR & Safety Audit — ${intern.full_name}`;
-    previewHtml.value = generateIndividualDtrHtml({
+    previewDocTitle.value = `Civil Service DTR Audit — ${intern.full_name}`;
+    previewHtml.value = generateCivilServiceDtrHtml({
       internName: intern.full_name,
       companyName: intern.company_name || 'Designated Training Agency',
       supervisorName: intern.supervisor_name || 'Assigned Supervisor',
@@ -475,9 +516,42 @@ const handleIndividualExport = async (intern: InternRecord) => {
 
     isReportPreviewOpen.value = true;
   } catch (err: any) {
-    toast.error(err.message || 'Failed to generate individual audit.', 'AUDIT ERROR');
+    toast.error(err.message || 'Failed to generate DTR audit.', 'AUDIT ERROR');
   } finally {
     isExportingIndividual.value = null;
+  }
+};
+
+/**
+ * Generates TraiNext Theme-Aligned Safety & Transit Audit File
+ */
+const handleSafetyAuditExport = async (intern: InternRecord) => {
+  isExportingSafety.value = intern.id;
+  try {
+    const { data: logs, error } = await supabase
+      .from('attendance_logs')
+      .select('date, am_arrival, am_departure, pm_arrival, pm_departure, hours_rendered, under_time_hours, under_time_minutes, status, safe_at_base_time, transit_notes')
+      .eq('intern_id', intern.id)
+      .order('date', { ascending: false });
+
+    if (error) throw error;
+
+    previewDocTitle.value = `Safety & Transit Audit — ${intern.full_name}`;
+    previewHtml.value = generateSafetyAuditHtml({
+      internName: intern.full_name,
+      companyName: intern.company_name || 'Designated Training Agency',
+      supervisorName: intern.supervisor_name || 'Assigned Supervisor',
+      contactNumber: intern.contact_number,
+      coordinatorName: authStore.user?.full_name || 'OJT Coordinator',
+      totalRendered: intern.total_hours,
+      logs: (logs || []) as IndividualLogRecord[],
+    });
+
+    isReportPreviewOpen.value = true;
+  } catch (err: any) {
+    toast.error(err.message || 'Failed to generate Safety audit.', 'AUDIT ERROR');
+  } finally {
+    isExportingSafety.value = null;
   }
 };
 
@@ -526,7 +600,35 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <main class="trainext-page-shell pb-24">
+  <main 
+    class="trainext-page-shell pb-24 min-h-screen relative"
+    @touchstart="handleTouchStart"
+    @touchmove="handleTouchMove"
+    @touchend="handleTouchEnd"
+  >
+    <!-- PULL TO REFRESH INDICATOR -->
+    <div 
+      class="pull-refresh-indicator"
+      :style="{ height: `${pullDistance}px`, opacity: pullDistance > 10 ? 1 : 0 }"
+    >
+      <div class="flex items-center justify-center gap-2 text-xs text-[#00d9ff] font-mono py-2">
+        <svg class="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span>{{ pullDistance >= 50 ? 'Release to refresh system...' : 'Pull down to refresh system' }}</span>
+      </div>
+    </div>
+
+    <!-- REFRESHING OVERLAY SPINNER -->
+    <div v-if="isRefreshing" class="absolute top-2 left-0 right-0 z-50 flex justify-center pointer-events-none">
+      <div class="px-4 py-1.5 rounded-full bg-[#050811]/90 border border-cyan-500/40 text-[11px] text-[#00d9ff] font-mono shadow-lg backdrop-blur-md flex items-center gap-2">
+        <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span>Syncing entire system data...</span>
+      </div>
+    </div>
+
     <div class="trainext-bg-railway" aria-hidden="true"></div>
     <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
@@ -547,13 +649,13 @@ onUnmounted(() => {
       </div>
 
       <div class="flex items-center gap-2 shrink-0">
-        <!-- 1. REFRESH BUTTON -->
+        <!-- 1. REFRESH BUTTON (OVERALL SYNC) -->
         <button 
           type="button" 
           @click="handleManualRefresh"
           class="header-action-btn flex items-center justify-center cursor-pointer transition-all"
-          title="Refresh Data"
-          aria-label="Refresh Data"
+          title="Refresh All Data"
+          aria-label="Refresh All Data"
         >
           <svg class="w-4 h-4 text-slate-300 hover:text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -671,7 +773,9 @@ onUnmounted(() => {
             <div class="p-3.5 rounded-2xl bg-amber-500/[0.04] border border-amber-500/25 flex flex-col gap-2">
               <div class="flex items-center justify-between">
                 <span class="text-[10px] font-bold uppercase tracking-wider text-amber-300 font-mono flex items-center gap-1.5">
-                  <span class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+                  <svg class="w-3.5 h-3.5 text-amber-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
                   Active Commutes (In Transit)
                 </span>
                 <span class="text-[10px] text-amber-400/80 font-mono">{{ inTransitInterns.length }} Trainees</span>
@@ -702,7 +806,9 @@ onUnmounted(() => {
             <div class="p-3.5 rounded-2xl bg-emerald-500/[0.04] border border-emerald-500/25 flex flex-col gap-2">
               <div class="flex items-center justify-between">
                 <span class="text-[10px] font-bold uppercase tracking-wider text-emerald-300 font-mono flex items-center gap-1.5">
-                  <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  <svg class="w-3.5 h-3.5 text-emerald-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
                   Confirmed Safe at Base Today
                 </span>
                 <span class="text-[10px] text-emerald-400/80 font-mono">{{ safeAtBaseInterns.length }} Cleared</span>
@@ -782,7 +888,7 @@ onUnmounted(() => {
                 class="pill-cyan-btn cursor-pointer whitespace-nowrap"
               >
                 <svg class="w-3.5 h-3.5 shrink-0 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                 </svg>
                 <span>Cohort Summary PDF</span>
               </button>
@@ -818,13 +924,14 @@ onUnmounted(() => {
               </button>
             </div>
 
-            <select v-model="directoryStatusFilter" class="trainext-select-glass text-xs h-10">
-              <option value="all">Filter: All Statuses</option>
-              <option value="on_duty">On Duty</option>
-              <option value="in_transit">In Transit</option>
-              <option value="safe_at_base">Safe at Base</option>
-              <option value="idle">Idle / Not Checked In</option>
-              <option value="completed_ojt">486 Hours Completed</option>
+            <!-- STANDARD SELECT DROPDOWN (CONSISTENT ACROSS WEB & MOBILE) -->
+            <select v-model="directoryStatusFilter" class="trainext-select-glass text-xs h-10 w-full px-3 rounded-xl bg-black/40 border border-white/15 text-white outline-none cursor-pointer">
+              <option value="all" class="bg-[#050811] text-white">Filter: All Statuses</option>
+              <option value="on_duty" class="bg-[#050811] text-white">On Duty</option>
+              <option value="in_transit" class="bg-[#050811] text-white">In Transit</option>
+              <option value="safe_at_base" class="bg-[#050811] text-white">Safe at Base</option>
+              <option value="idle" class="bg-[#050811] text-white">Idle / Not Checked In</option>
+              <option value="completed_ojt" class="bg-[#050811] text-white">486 Hours Completed</option>
             </select>
           </div>
 
@@ -833,21 +940,22 @@ onUnmounted(() => {
             No trainees match the current search or status filter.
           </div>
 
-          <div v-else class="flex flex-col gap-2">
+          <div v-else class="flex flex-col gap-2.5">
             <div 
               v-for="intern in filteredDirectoryInterns" 
               :key="intern.id"
-              class="report-item-card group"
+              class="report-item-card group flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:p-4"
             >
-              <div class="min-w-0 flex-1">
+              <!-- LEFT: ELEMENTS -->
+              <div class="min-w-0 flex-1 flex flex-col items-start text-left">
                 <div class="flex flex-wrap items-center gap-2">
-                  <p class="text-xs sm:text-sm font-semibold text-white truncate">{{ intern.full_name }}</p>
+                  <p class="text-xs sm:text-sm font-semibold text-white truncate text-left">{{ intern.full_name }}</p>
                   
                   <span 
                     class="trainext-chip shrink-0 text-[9.5px]"
                     :class="{
                       'chip-cyan': intern.today_status === 'on_duty',
-                      'chip-[#f59e0b]': intern.today_status === 'in_transit',
+                      'chip-amber': intern.today_status === 'in_transit',
                       'chip-emerald': intern.today_status === 'safe_at_base',
                       'border border-white/15 text-[#858994]': intern.today_status === 'idle'
                     }"
@@ -866,27 +974,43 @@ onUnmounted(() => {
                   </span>
                 </div>
 
-                <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#858994] mt-1 font-mono">
-                  <span class="text-slate-300 font-medium truncate max-w-[140px]">{{ intern.company_name }}</span>
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#858994] mt-1 font-mono text-left">
+                  <span class="text-slate-300 font-medium truncate max-w-[200px] sm:max-w-none text-left">{{ intern.company_name }}</span>
                   <span>•</span>
-                  <span>Hours: <strong class="text-[#00d9ff]">{{ intern.total_hours.toFixed(1) }}h</strong></span>
+                  <span class="text-left">Hours: <strong class="text-[#00d9ff]">{{ intern.total_hours.toFixed(1) }}h</strong></span>
                 </div>
               </div>
 
-              <!-- DTR AUDIT BUTTON -->
-              <div class="flex items-center gap-2 shrink-0">
+              <!-- RIGHT/BOTTOM: DTR AUDIT & SAFETY AUDIT -->
+              <div class="flex items-center justify-center sm:justify-end gap-2 w-full sm:w-auto pt-2 sm:pt-0 border-t border-white/5 sm:border-0 shrink-0">
+                <!-- DTR Audit Button -->
                 <button 
                   type="button"
                   @click="handleIndividualExport(intern)"
                   :disabled="isExportingIndividual === intern.id"
-                  class="pill-cyan-btn cursor-pointer whitespace-nowrap"
-                  title="View complete attendance logs and timestamps"
+                  class="pill-cyan-btn cursor-pointer whitespace-nowrap text-[10px] flex-1 sm:flex-none justify-center"
+                  title="View official Civil Service Form No. 48 DTR Audit"
                 >
                   <div v-if="isExportingIndividual === intern.id" class="spinner-ring border-[#00d9ff]"></div>
                   <svg v-else class="w-3.5 h-3.5 shrink-0 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
                   <span>DTR Audit</span>
+                </button>
+
+                <!-- Safety Audit Button -->
+                <button 
+                  type="button"
+                  @click="handleSafetyAuditExport(intern)"
+                  :disabled="isExportingSafety === intern.id"
+                  class="pill-neutral-btn cursor-pointer whitespace-nowrap text-[10px] flex-1 sm:flex-none justify-center"
+                  title="View TraiNext Safety & Transit Audit"
+                >
+                  <div v-if="isExportingSafety === intern.id" class="spinner-ring border-emerald-400"></div>
+                  <svg v-else class="w-3.5 h-3.5 shrink-0 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
+                  <span>Safety Audit</span>
                 </button>
               </div>
             </div>
@@ -940,11 +1064,11 @@ onUnmounted(() => {
                   {{ (intern.full_name || 'T')[0] }}
                 </div>
 
-                <div class="min-w-0">
-                  <p class="text-xs sm:text-sm font-semibold text-white group-hover:text-[#00d9ff] transition-colors truncate">
+                <div class="min-w-0 text-left">
+                  <p class="text-xs sm:text-sm font-semibold text-white group-hover:text-[#00d9ff] transition-colors truncate text-left">
                     {{ intern.full_name }}
                   </p>
-                  <div class="flex flex-wrap items-center gap-2 text-[10.5px] text-[#858994] font-mono mt-0.5">
+                  <div class="flex flex-wrap items-center gap-2 text-[10.5px] text-[#858994] font-mono mt-0.5 text-left">
                     <span class="text-emerald-400 font-semibold">{{ intern.approved_reports_count }} Approved</span>
                     <span v-if="intern.rejected_reports_count > 0" class="text-rose-400 font-semibold">• {{ intern.rejected_reports_count }} Rejected</span>
                   </div>
@@ -1036,11 +1160,11 @@ onUnmounted(() => {
       <div class="w-full max-w-[620px] my-auto rounded-[24px] bg-[#050811]/95 border border-white/15 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         <!-- MODAL HEADER -->
         <header class="px-5 sm:px-6 py-4 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.015]">
-          <div class="min-w-0">
-            <p class="text-sm sm:text-base font-bold text-white truncate font-['Aileron',sans-serif]">
+          <div class="min-w-0 text-left">
+            <p class="text-sm sm:text-base font-bold text-white truncate font-['Aileron',sans-serif] text-left">
               {{ selectedTraineeForReview.full_name }} — Accomplishment Audits
             </p>
-            <p class="text-[10px] text-[#00d9ff] font-mono tracking-wider truncate mt-0.5">
+            <p class="text-[10px] text-[#00d9ff] font-mono tracking-wider truncate mt-0.5 text-left">
               {{ selectedTraineeForReview.company_name }} • {{ currentTraineeReports.length }} REVIEWED ENTRIES
             </p>
           </div>
@@ -1090,14 +1214,14 @@ onUnmounted(() => {
           <div 
             v-for="rep in currentTraineeReports" 
             :key="rep.id"
-            class="p-4 rounded-2xl bg-white/[0.02] border flex flex-col gap-2.5 transition-colors"
+            class="p-4 rounded-2xl bg-white/[0.02] border flex flex-col gap-2.5 transition-colors text-left"
             :class="rep.status === 'approved' ? 'border-white/10 hover:border-emerald-500/30' : 'border-rose-500/20 bg-rose-950/[0.03] hover:border-rose-500/40'"
           >
             <!-- DATE, TITLE & STATUS ROW -->
             <div class="flex items-start justify-between gap-2">
-              <div class="min-w-0 flex-1">
+              <div class="min-w-0 flex-1 text-left">
                 <div class="flex items-center gap-2">
-                  <p class="text-xs sm:text-sm font-bold text-white tracking-wide truncate">
+                  <p class="text-xs sm:text-sm font-bold text-white tracking-wide truncate text-left">
                     {{ rep.title }}
                   </p>
                   <span 
@@ -1114,14 +1238,14 @@ onUnmounted(() => {
             </div>
 
             <!-- DESCRIPTION -->
-            <p class="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
+            <p class="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap text-left">
               {{ rep.description }}
             </p>
 
             <!-- SUPERVISOR FEEDBACK REMARKS -->
             <div 
               v-if="rep.feedback" 
-              class="p-2.5 rounded-xl border text-xs flex flex-col gap-0.5 mt-1"
+              class="p-2.5 rounded-xl border text-xs flex flex-col gap-0.5 mt-1 text-left"
               :class="rep.status === 'approved' 
                 ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200' 
                 : 'bg-rose-950/30 border-rose-500/30 text-rose-200'"
@@ -1135,7 +1259,7 @@ onUnmounted(() => {
                 </svg>
                 <span>{{ rep.status === 'approved' ? 'SUPERVISOR REMARKS' : 'SUPERVISOR REJECTION REASON' }}:</span>
               </span>
-              <p class="leading-relaxed">{{ rep.feedback }}</p>
+              <p class="leading-relaxed text-left">{{ rep.feedback }}</p>
             </div>
           </div>
         </div>
@@ -1148,15 +1272,15 @@ onUnmounted(() => {
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md"
     >
       <div class="trainext-glass-card max-w-sm w-full p-6 flex flex-col gap-4 border border-white/20 animate-in fade-in zoom-in-95 duration-150">
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 text-left">
           <div class="w-10 h-10 rounded-full bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
             <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
             </svg>
           </div>
-          <div>
-            <h3 class="text-sm font-bold text-white">Confirm Sign Out</h3>
-            <p class="text-xs text-[#858994]">Are you sure you want to end your coordinator session?</p>
+          <div class="text-left">
+            <h3 class="text-sm font-bold text-white text-left">Confirm Sign Out</h3>
+            <p class="text-xs text-[#858994] text-left">Are you sure you want to end your coordinator session?</p>
           </div>
         </div>
 
@@ -1198,6 +1322,17 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* PULL TO REFRESH STYLING */
+.pull-refresh-indicator {
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  transition: height 150ms ease-out, opacity 150ms ease-out;
+  background: rgba(0, 217, 255, 0.03);
+  border-bottom: 1px solid rgba(0, 217, 255, 0.1);
+}
+
 /* STICKY HEADER */
 .sticky-coordinator-header {
   position: sticky !important;
@@ -1304,6 +1439,36 @@ onUnmounted(() => {
 .search-input-field:focus {
   border-color: #00d9ff;
   box-shadow: 0 0 10px rgba(0, 217, 255, 0.25);
+}
+
+/* STANDARD SELECT DROPDOWN FIX FOR MOBILE AND WEB */
+.trainext-select-glass {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-color: rgba(0, 0, 0, 0.45) !important;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300d9ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 14px;
+  padding-right: 36px !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  color: #ffffff !important;
+  font-family: "Aileron", -apple-system, sans-serif !important;
+  font-size: 11.5px !important;
+  outline: none !important;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.trainext-select-glass:focus {
+  border-color: #00d9ff !important;
+  box-shadow: 0 0 10px rgba(0, 217, 255, 0.25) !important;
+}
+
+.trainext-select-glass option {
+  background-color: #050811 !important;
+  color: #ffffff !important;
 }
 
 /* ERGONOMIC PILL BUTTONS */

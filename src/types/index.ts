@@ -45,22 +45,42 @@ export interface InternSupervisorLink {
   intern?: UserProfile;
 }
 
-// 4. Attendance & Geofenced DTR Record
-  export interface AttendanceLog {
-    id: string;
-    intern_id: string;
-    supervisor_id?: string | null;
-    date: string;
-    time_in: string;
-    time_out?: string | null;
-    hours_rendered?: number;
-    status: 'on_duty' | 'in_transit' | 'safe_at_base' | 'completed' | 'absent';
-    safe_at_base_time?: string | null;
-    safe_location_lat?: number | null;
-    safe_location_lng?: number | null;
-    transit_notes?: string | null;
-    created_at?: string;
-  }
+// 4. Attendance & Geofenced DTR Record (Updated para sa 4-Time Entries at CSC Format)
+export interface AttendanceLog {
+  id: string;
+  intern_id: string;
+  supervisor_id?: string | null;
+  site_id?: string | null;
+  date: string;
+  
+  // 4-Time Entry Columns (Civil Service Commission / DTR format)
+  am_arrival?: string | null;
+  am_departure?: string | null;
+  pm_arrival?: string | null;
+  pm_departure?: string | null;
+  
+  // Legacy / Compatibility fields kung ginagamit pa sa ibang bahagi
+  time_in?: string | null;
+  time_out?: string | null;
+  
+  hours_rendered?: number;
+  under_time_hours?: number;
+  under_time_minutes?: number;
+  
+  status: ShiftStatus;
+  safe_at_base_time?: string | null;
+  safe_location_lat?: number | null;
+  safe_location_lng?: number | null;
+  transit_notes?: string | null;
+  
+  time_in_lat?: number | null;
+  time_in_lng?: number | null;
+  time_out_lat?: number | null;
+  time_out_lng?: number | null;
+  
+  created_at?: string;
+  updated_at?: string;
+}
 
 // 5. Accomplishment Log with Multi-Proof Support
 export interface AccomplishmentLog {

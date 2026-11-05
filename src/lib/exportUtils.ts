@@ -12,9 +12,15 @@ export interface TraineeExportRow {
 
 export interface IndividualLogRecord {
   date: string;
+  am_arrival?: string | null;
+  am_departure?: string | null;
+  pm_arrival?: string | null;
+  pm_departure?: string | null;
   time_in?: string | null;
   time_out?: string | null;
   hours_rendered?: number;
+  under_time_hours?: number;
+  under_time_minutes?: number;
   status: string;
   safe_at_base_time?: string | null;
   transit_notes?: string | null;
@@ -60,36 +66,40 @@ export function exportToCsv(filename: string, rows: Record<string, any>[]): void
 }
 
 /**
- * 1. PANG-LAHATAN: Coordinator Master Summary Report HTML
+ * 1. Coordinator Master Summary Report HTML (A4 Portrait, Pastel Blue Headers, Target/Rendered/Remaining/Status)
  */
 export function generateMasterReportHtml(params: {
   coordinatorName: string;
   batchTitle?: string;
   data: TraineeExportRow[];
 }): string {
+  const TARGET_HOURS = 486;
+
   const rowsHtml = params.data
-    .map(
-      (item, index) => `
+    .map((item, index) => {
+      const rendered = Number(item.totalRenderedHours || 0);
+      const remaining = Math.max(0, TARGET_HOURS - rendered);
+      
+      let statusText = item.affiliationStatus || 'On-Going';
+      if (statusText === 'COMPLETED') statusText = 'Completed';
+      else if (statusText === 'DELAYED') statusText = 'Delayed';
+      else if (statusText !== 'Completed' && statusText !== 'Delayed') statusText = 'On-Going';
+
+      return `
       <tr>
-        <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-weight: bold;">${index + 1}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 8px; font-weight: 700; color: #0f172a;">${item.fullName}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 8px;">${item.companyName}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 8px;">${item.supervisorName}</td>
-        <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-weight: bold; color: #0284c7;">
-          ${Number(item.totalRenderedHours || 0).toFixed(1)} hrs
-        </td>
-      <td style="border: 1px solid #cbd5e1; padding: 8px; text-align: center;">
-          <span style="display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; ${
-            item.affiliationStatus === 'COMPLETED'
-              ? 'background: #dcfce7; color: #15803d; border: 1px solid #86efac;'
-              : 'background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1;'
-          }">
-            ${item.affiliationStatus}
-          </span>
+        <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${index + 1}</td>
+        <td style="border: 1px solid #000; padding: 4px; font-weight: bold;">${item.fullName}</td>
+        <td style="border: 1px solid #000; padding: 4px;">${item.companyName}</td>
+        <td style="border: 1px solid #000; padding: 4px;">${item.supervisorName}</td>
+        <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${TARGET_HOURS} hrs</td>
+        <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${rendered.toFixed(1)} hrs</td>
+        <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${remaining.toFixed(1)} hrs</td>
+        <td style="border: 1px solid #000; padding: 4px; text-align: center; font-size: 9.5px; font-weight: bold;">
+          ${statusText}
         </td>
       </tr>
-    `
-    )
+    `;
+    })
     .join('');
 
   return `
@@ -97,54 +107,71 @@ export function generateMasterReportHtml(params: {
     <html lang="en">
       <head>
         <meta charset="UTF-8">
-        <title>TraiNext — OJT Cohort Master Summary Report</title>
+        <title>OJT Cohort Summary Report</title>
         <style>
-          @page { size: portrait; margin: 15mm; }
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; padding: 24px; font-size: 11px; background: #fff; }
-          .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 20px; }
-          .title { font-size: 16px; font-weight: 800; text-transform: uppercase; margin: 0; }
-          .subtitle { font-size: 12px; font-weight: 600; color: #0284c7; margin: 4px 0 0; }
-          .meta { margin-top: 6px; font-size: 10px; color: #64748b; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-          th { background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 8px; text-align: left; font-size: 10px; font-weight: 800; text-transform: uppercase; color: #475569; }
-          .signatures { margin-top: 45px; display: flex; justify-content: space-between; }
-          .sign-col { width: 42%; text-align: center; }
-          .sign-line { border-top: 1px solid #0f172a; margin-top: 45px; padding-top: 5px; font-weight: 700; font-size: 12px; }
+          @page { size: A4 portrait; margin: 15mm; }
+          body { font-family: Arial, sans-serif; background: #fff !important; color: #000; margin: 0; padding: 15px; font-size: 11px; }
+          .page-container {
+            width: 100%;
+            max-width: 185mm;
+            margin: 0 auto;
+            background: #fff !important;
+            box-sizing: border-box;
+          }
+          .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 15px; }
+          .title { font-size: 14px; font-weight: bold; text-transform: uppercase; margin: 0; }
+          .subtitle { font-size: 11px; font-style: italic; margin-top: 2px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 25px; background: #fff !important; }
+          th { background: #e0f2fe; border: 1px solid #000; color: #000; padding: 6px 4px; text-align: center; font-size: 9px; font-weight: bold; }
+          .signatures { margin-top: 35px; display: flex; justify-content: space-between; }
+          .sign-box { width: 45%; text-align: center; }
+          .sign-line { border-top: 1px solid #000; margin-top: 35px; padding-top: 4px; font-weight: bold; font-size: 11px; }
+
+          @media screen and (max-width: 768px) {
+            .page-container {
+              overflow-x: auto;
+            }
+          }
         </style>
       </head>
       <body>
-        <div class="header">
-          <div class="title">TraiNext OJT Trainee Master Summary Audit</div>
-          <div class="subtitle">${params.batchTitle || 'Academic Practicum Monitoring Records'}</div>
-          <div class="meta">Date Generated: ${new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })} | Coordinator: ${params.coordinatorName}</div>
-        </div>
-
-        <table>
-          <thead>
-            <tr>
-              <th style="text-align: center; width: 35px;">#</th>
-              <th>Trainee Name</th>
-              <th>Host Training Company</th>
-              <th>Designated Supervisor</th>
-              <th style="text-align: center; width: 110px;">Rendered Hours</th>
-              <th style="text-align: center; width: 90px;">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
-        </table>
-
-        <div class="signatures">
-          <div class="sign-col">
-            <div>Prepared by:</div>
-            <div class="sign-line">${params.coordinatorName}</div>
-            <div style="font-size: 10px; color: #64748b;">OJT Academic Coordinator</div>
+        <div class="page-container">
+          <div class="header">
+            <div class="title"><strong>OJT Trainee Batch Master Progress and Status Report</strong></div>
+            <div class="subtitle">${params.batchTitle || 'Academic Practicum Monitoring Records'}</div>
           </div>
-          <div class="sign-col">
-            <div>Noted by:</div>
-            <div class="sign-line">Dean / Department Chair</div>
-            <div style="font-size: 10px; color: #64748b;">College of Information Technology</div>
+
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 25px;">#</th>
+                <th>Trainee Name</th>
+                <th>Host Training Company</th>
+                <th>Industry Supervisor</th>
+                <th style="width: 55px;">Target Hours</th>
+                <th style="width: 55px;">Rendered Hours</th>
+                <th style="width: 55px;">Remaining Hours</th>
+                <th style="width: 65px;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+
+          <div style="font-size: 10px; margin-bottom: 20px;">
+            This master summary report compiles the real-time progress, rendered hours, and completion status of interns enrolled under the TraiNext institutional tracking system.
+          </div>
+
+          <div class="signatures">
+            <div class="sign-box">
+              <div class="sign-line"><strong>${params.coordinatorName}</strong></div>
+              <div style="font-size: 9.5px; margin-top: 2px;">OJT Academic Coordinator</div>
+            </div>
+            <div class="sign-box">
+              <div class="sign-line"><strong>John Edgar Anthony</strong></div>
+              <div style="font-size: 9.5px; margin-top: 2px;">Dean, College of Computer Studies</div>
+            </div>
           </div>
         </div>
       </body>
@@ -153,9 +180,170 @@ export function generateMasterReportHtml(params: {
 }
 
 /**
- * 2. PANG-ISA-ISA: Individual Trainee DTR & Transit Safety Accountability Log HTML
+ * Helper upang mabilang ang regular days at saturdays sa isang buwan
  */
-export function generateIndividualDtrHtml(params: {
+function getMonthDaysCount(yearMonth: string): { weekdays: number; saturdays: number } {
+  try {
+    const [yStr, mStr] = yearMonth.split('-');
+    const year = parseInt(yStr, 10);
+    const month = parseInt(mStr, 10);
+    if (isNaN(year) || isNaN(month)) return { weekdays: 22, saturdays: 4 };
+
+    let weekdays = 0;
+    let saturdays = 0;
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dayOfWeek = new Date(year, month - 1, day).getDay();
+      if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+        weekdays++;
+      } else if (dayOfWeek === 6) {
+        saturdays++;
+      }
+    }
+    return { weekdays, saturdays };
+  } catch {
+    return { weekdays: 22, saturdays: 4 };
+  }
+}
+
+/**
+ * Helper to build a single DTR block matching exact formatting requirements
+ */
+function buildSingleDtrBlockHtml(params: {
+  internName: string;
+  yearMonthKey: string;
+  monthName: string;
+  logs: IndividualLogRecord[];
+}): string {
+  const formatTime = (timeStr?: string | null) => {
+    if (!timeStr) return '';
+    try {
+      let dateObj: Date;
+      if (timeStr.includes('T') || timeStr.includes('-')) {
+        dateObj = new Date(timeStr);
+      } else {
+        const parts = timeStr.split(':');
+        if (parts.length >= 2) {
+          const h = parseInt(parts[0], 10);
+          const m = parseInt(parts[1], 10);
+          dateObj = new Date();
+          dateObj.setHours(h, m, 0, 0);
+        } else {
+          return timeStr;
+        }
+      }
+      if (isNaN(dateObj.getTime())) return timeStr;
+      return dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    } catch {
+      return '';
+    }
+  };
+
+  const logMap = new Map<number, IndividualLogRecord>();
+  params.logs.forEach((log) => {
+    if (log.date) {
+      const dayNum = parseInt(log.date.split('-')[2], 10);
+      if (!isNaN(dayNum)) {
+        logMap.set(dayNum, log);
+      }
+    }
+  });
+
+  let rowsHtml = '';
+  let totalHoursSum = 0;
+
+  for (let day = 1; day <= 31; day++) {
+    const log = logMap.get(day);
+    const amArr = formatTime(log?.am_arrival || log?.time_in);
+    const amDep = formatTime(log?.am_departure);
+    const pmArr = formatTime(log?.pm_arrival);
+    const pmDep = formatTime(log?.pm_departure || log?.time_out);
+    const utHours = log?.under_time_hours || '';
+    const utMins = log?.under_time_minutes || '';
+    if (log?.hours_rendered) {
+      totalHoursSum += Number(log.hours_rendered);
+    }
+
+    rowsHtml += `
+      <tr>
+        <td style="border: 1px solid #000; padding: 1.5px 2px; text-align: center; font-size: 8.5px; font-family: Arial, sans-serif; font-weight: bold;">${day}</td>
+        <td style="border: 1px solid #000; padding: 1.5px 2px; text-align: center; font-size: 8.5px; font-family: monospace;">${amArr}</td>
+        <td style="border: 1px solid #000; padding: 1.5px 2px; text-align: center; font-size: 8.5px; font-family: monospace;">${amDep}</td>
+        <td style="border: 1px solid #000; padding: 1.5px 2px; text-align: center; font-size: 8.5px; font-family: monospace;">${pmArr}</td>
+        <td style="border: 1px solid #000; padding: 1.5px 2px; text-align: center; font-size: 8.5px; font-family: monospace;">${pmDep}</td>
+        <td style="border: 1px solid #000; padding: 1.5px 2px; text-align: center; font-size: 8.5px; font-family: monospace;">${utHours}</td>
+        <td style="border: 1px solid #000; padding: 1.5px 2px; text-align: center; font-size: 8.5px; font-family: monospace;">${utMins}</td>
+      </tr>
+    `;
+  }
+
+  const { weekdays, saturdays } = getMonthDaysCount(params.yearMonthKey);
+
+  return `
+    <div class="dtr-column">
+      <div style="font-size: 9px; font-family: Arial, sans-serif; font-style: italic; margin-bottom: 2px;">Civil Service Form No. 48</div>
+      <div class="dtr-title-header">DAILY TIME RECORD</div>
+      
+      <div class="dtr-meta-info">
+        <div style="text-align: center; font-size: 9.5px; margin-bottom: 3px;">
+          <u>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<strong>${params.internName}</strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</u><br>
+          <span style="font-size: 8px; font-style: italic;">(Name)</span>
+        </div>
+        <div style="font-size: 8.5px; margin-bottom: 2px;">
+          For the month of <u>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<strong>${params.monthName}</strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</u>
+        </div>
+        <div style="font-size: 7.5px; margin-bottom: 3px; line-height: 1.2;">
+          Official hours for arrival and departure<br>
+          Regular days: <strong>${weekdays}</strong><br>
+          Saturdays: <strong>${saturdays}</strong>
+        </div>
+      </div>
+
+      <table class="dtr-template-table">
+        <thead>
+          <tr>
+            <th rowspan="2" style="width: 22px;">Day</th>
+            <th colspan="2">A.M.</th>
+            <th colspan="2">P.M.</th>
+            <th colspan="2">Undertime</th>
+          </tr>
+          <tr>
+            <th style="width: 36px;">Arrival</th>
+            <th style="width: 36px;">Departure</th>
+            <th style="width: 36px;">Arrival</th>
+            <th style="width: 36px;">Departure</th>
+            <th style="width: 20px;">Hrs</th>
+            <th style="width: 20px;">Mins</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+          <tr>
+            <td style="border: 1px solid #000; padding: 2px; text-align: left; font-size: 8.5px;">Total</td>
+            <td colspan="6" style="border: 1px solid #000; padding: 2px; text-align: right; font-size: 8.5px; font-family: monospace; padding-right: 6px;">
+              ${totalHoursSum > 0 ? totalHoursSum.toFixed(1) + ' hrs' : ''}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="dtr-cert">
+        <em>I certify on my honor that the above is a true and correct report of the hours of work performed, record of which was made daily at the time of arrival and departure from office.</em>
+      </div>
+
+      <div class="dtr-verify-section">
+        <div style="font-size: 7.5px; margin-bottom: 2px; text-align: left;"><em>VERIFIED as to the prescribed office hours:</em></div>
+        <div class="dtr-sign-line"><strong>In Charge</strong></div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * 2. Official Daily Time Record (DTR Audit)
+ */
+export function generateCivilServiceDtrHtml(params: {
   internName: string;
   companyName: string;
   supervisorName: string;
@@ -164,35 +352,211 @@ export function generateIndividualDtrHtml(params: {
   totalRendered: number;
   logs: IndividualLogRecord[];
 }): string {
-  const formatTime = (isoString?: string | null) => {
-    if (!isoString) return '—';
+  const monthMap = new Map<string, IndividualLogRecord[]>();
+  params.logs.forEach((log) => {
+    if (log.date) {
+      const monthKey = log.date.substring(0, 7);
+      if (!monthMap.has(monthKey)) {
+        monthMap.set(monthKey, []);
+      }
+      monthMap.get(monthKey)!.push(log);
+    }
+  });
+
+  let sortedMonths = Array.from(monthMap.keys()).sort();
+  if (sortedMonths.length === 0) {
+    const currentMonth = new Date().toISOString().substring(0, 7);
+    sortedMonths = [currentMonth];
+    monthMap.set(currentMonth, []);
+  }
+
+  const selectedMonths = sortedMonths.slice(-2);
+  if (selectedMonths.length === 1) {
+    selectedMonths.unshift(selectedMonths[0]);
+  }
+
+  const formatMonthName = (yearMonth: string) => {
     try {
-      return new Date(isoString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const [y, m] = yearMonth.split('-');
+      const dateObj = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
+      return dateObj.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
     } catch {
-      return '—';
+      return yearMonth;
+    }
+  };
+
+  const block1Html = buildSingleDtrBlockHtml({
+    internName: params.internName,
+    yearMonthKey: selectedMonths[0],
+    monthName: formatMonthName(selectedMonths[0]),
+    logs: monthMap.get(selectedMonths[0]) || [],
+  });
+
+  const block2Html = buildSingleDtrBlockHtml({
+    internName: params.internName,
+    yearMonthKey: selectedMonths[1],
+    monthName: formatMonthName(selectedMonths[1]),
+    logs: monthMap.get(selectedMonths[1]) || [],
+  });
+
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <title>Civil Service Form No. 48 — ${params.internName}</title>
+        <style>
+          @page { size: A4 portrait; margin: 10mm; }
+          body { font-family: Arial, sans-serif; color: #000; margin: 0; padding: 10px; background: #fff !important; }
+          .page-container {
+            width: 100%;
+            max-width: 190mm;
+            margin: 0 auto;
+            background: #fff !important;
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 10mm;
+            box-sizing: border-box;
+          }
+          .dtr-column {
+            width: 90mm;
+            background: #fff !important;
+            border: 1px solid #475569;
+            padding: 4mm 4mm;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+          }
+          .dtr-title-header {
+            text-align: center;
+            font-size: 12px;
+            font-weight: bold;
+            font-family: Arial, sans-serif;
+            margin-bottom: 3px;
+            letter-spacing: 0.3px;
+          }
+          .dtr-meta-info {
+            font-size: 9.5px;
+            margin-bottom: 4px;
+          }
+          table.dtr-template-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 4px;
+            background: #fff !important;
+          }
+          table.dtr-template-table th, table.dtr-template-table td {
+            border: 1px solid #000;
+            text-align: center;
+            background: #fff !important;
+          }
+          table.dtr-template-table th {
+            padding: 2px 1px;
+            font-size: 8.5px;
+            font-weight: bold;
+            background: #fff !important;
+          }
+          .dtr-cert {
+            font-size: 8.5px;
+            line-height: 1.25;
+            text-align: justify;
+            margin-bottom: 6px;
+          }
+          .dtr-verify-section {
+            width: 150px;
+            margin-left: auto;
+            text-align: center;
+          }
+          .dtr-sign-line {
+            border-top: 1px solid #000;
+            margin-top: 18px;
+            padding-top: 2px;
+            font-size: 9.5px;
+          }
+
+          @media screen and (max-width: 768px) {
+            .page-container {
+              flex-direction: column !important;
+              align-items: center !important;
+              gap: 20px !important;
+              overflow-x: auto;
+            }
+            .dtr-column {
+              width: 100% !important;
+              max-width: 95vw !important;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="page-container">
+          ${block1Html}
+          ${block2Html}
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+/**
+ * 3. TraiNext Safety Audit Report 
+ */
+export function generateSafetyAuditHtml(params: {
+  internName: string;
+  companyName: string;
+  supervisorName: string;
+  contactNumber?: string;
+  coordinatorName: string;
+  totalRendered: number;
+  logs: IndividualLogRecord[];
+}): string {
+  const formatTime = (timeStr?: string | null) => {
+    if (!timeStr) return '';
+    try {
+      let dateObj: Date;
+      if (timeStr.includes('T') || timeStr.includes('-')) {
+        dateObj = new Date(timeStr);
+      } else {
+        const parts = timeStr.split(':');
+        if (parts.length >= 2) {
+          const h = parseInt(parts[0], 10);
+          const m = parseInt(parts[1], 10);
+          dateObj = new Date();
+          dateObj.setHours(h, m, 0, 0);
+        } else {
+          return timeStr;
+        }
+      }
+      if (isNaN(dateObj.getTime())) return timeStr;
+      return dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    } catch {
+      return '';
     }
   };
 
   const rowsHtml = params.logs.length === 0 
-    ? `<tr><td colspan="6" style="text-align: center; padding: 15px; color: #94a3b8;">No official duty logs recorded yet.</td></tr>`
+    ? `<tr><td colspan="11" style="text-align: center; padding: 20px; color: #64748b;">No safety or transit logs recorded yet.</td></tr>`
     : params.logs
         .map(
           (log, index) => `
         <tr>
-          <td style="border: 1px solid #cbd5e1; padding: 6px; text-align: center; font-weight: bold;">${index + 1}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 6px; font-family: monospace; font-size: 11px;">${log.date}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 6px; font-family: monospace; text-align: center;">${formatTime(log.time_in)}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 6px; font-family: monospace; text-align: center;">${formatTime(log.time_out)}</td>
-          <td style="border: 1px solid #cbd5e1; padding: 6px; text-align: center; font-weight: bold; color: #0284c7;">
-            ${Number(log.hours_rendered || 0).toFixed(1)} hrs
+          <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${index + 1}</td>
+          <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${log.date}</td>
+          <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${formatTime(log.am_arrival || log.time_in)}</td>
+          <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${formatTime(log.am_departure)}</td>
+          <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${formatTime(log.pm_arrival)}</td>
+          <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${formatTime(log.pm_departure || log.time_out)}</td>
+          <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${log.under_time_hours || 0}</td>
+          <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${log.under_time_minutes || 0}</td>
+          <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${formatTime(log.safe_at_base_time)}</td>
+          <td style="border: 1px solid #000; padding: 4px; text-align: center; font-size: 9px;">
+            ${log.safe_at_base_time ? 'Safe At Base' : 'Pending'}
           </td>
-          <td style="border: 1px solid #cbd5e1; padding: 6px; font-size: 10px;">
-            ${
-              log.safe_at_base_time
-                ? `<span style="color: #059669; font-weight: bold;">✓ Safe: ${formatTime(log.safe_at_base_time)}</span>`
-                : `<span style="color: #d97706; font-weight: 600;">Pending Confirmation</span>`
-            }
-            ${log.transit_notes ? `<div style="font-size: 9px; color: #64748b; margin-top: 2px;">Note: ${log.transit_notes}</div>` : ''}
+          <td style="border: 1px solid #000; padding: 4px; font-size: 9px; font-family: monospace;">
+            ${log.transit_notes || '—'}
           </td>
         </tr>
       `
@@ -204,62 +568,110 @@ export function generateIndividualDtrHtml(params: {
     <html lang="en">
       <head>
         <meta charset="UTF-8">
-        <title>TraiNext Individual DTR — ${params.internName}</title>
+        <title>Safety Audit Report — ${params.internName}</title>
         <style>
-          @page { size: portrait; margin: 15mm; }
-          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; padding: 24px; font-size: 11px; background: #fff; }
-          .header { text-align: center; border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 16px; }
-          .title { font-size: 16px; font-weight: 800; text-transform: uppercase; margin: 0; }
-          .subtitle { font-size: 12px; font-weight: 600; color: #0284c7; margin: 4px 0 0; }
-          .profile-box { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; margin-bottom: 20px; font-size: 11px; }
-          table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-          th { background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 8px 6px; text-align: left; font-size: 10px; font-weight: 800; text-transform: uppercase; color: #475569; }
-          .signatures { margin-top: 45px; display: flex; justify-content: space-between; }
-          .sign-col { width: 42%; text-align: center; }
-          .sign-line { border-top: 1px solid #0f172a; margin-top: 45px; padding-top: 5px; font-weight: 700; font-size: 12px; }
+          @page { size: A4 portrait; margin: 15mm; }
+          body { font-family: Arial, sans-serif; background: #fff !important; color: #000; margin: 0; padding: 15px; font-size: 11px; }
+          .page-container {
+            width: 100%;
+            max-width: 185mm;
+            margin: 0 auto;
+            background: #fff !important;
+            box-sizing: border-box;
+          }
+          .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 15px; }
+          .title { font-size: 14px; font-weight: bold; text-transform: uppercase; margin: 0; }
+          .subtitle { font-size: 11px; font-style: italic; margin-top: 2px; }
+          .profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; border: 1px solid #000; padding: 10px; margin-bottom: 15px; font-size: 10.5px; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 25px; background: #fff !important; }
+          th { background: #e0f2fe; border: 1px solid #000; color: #000; padding: 5px 3px; text-align: center; font-size: 8.5px; font-weight: bold; }
+          .signatures { margin-top: 35px; display: flex; justify-content: space-between; }
+          .sign-box { width: 45%; text-align: center; }
+          .sign-line { border-top: 1px solid #000; margin-top: 35px; padding-top: 4px; font-weight: bold; font-size: 11px; }
+
+          @media screen and (max-width: 768px) {
+            .profile-grid {
+              grid-template-columns: 1fr !important;
+            }
+            .page-container {
+              overflow-x: auto;
+            }
+          }
         </style>
       </head>
       <body>
-        <div class="header">
-          <div class="title">Individual Trainee Daily Time Record & Safety Audit</div>
-          <div class="subtitle">TraiNext Geofenced Attendance & Base Transit Verification</div>
-        </div>
-
-        <div class="profile-box">
-          <div><strong>Trainee Name:</strong> ${params.internName}</div>
-          <div><strong>Total Hours Rendered:</strong> <span style="color: #0284c7; font-weight: bold;">${params.totalRendered.toFixed(1)} hrs</span></div>
-          <div><strong>Host Training Company:</strong> ${params.companyName}</div>
-          <div><strong>Company Supervisor:</strong> ${params.supervisorName}</div>
-          <div><strong>Contact Number:</strong> ${params.contactNumber || 'N/A'}</div>
-          <div><strong>OJT Coordinator:</strong> ${params.coordinatorName}</div>
-        </div>
-
-        <table>
-          <thead>
-            <tr>
-              <th style="text-align: center; width: 30px;">#</th>
-              <th style="width: 80px;">Date</th>
-              <th style="text-align: center; width: 75px;">Time In</th>
-              <th style="text-align: center; width: 75px;">Time Out</th>
-              <th style="text-align: center; width: 90px;">Rendered</th>
-              <th>Safe at Base Transit Verification</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
-        </table>
-
-        <div class="signatures">
-          <div class="sign-col">
-            <div>Verified & Concurred by:</div>
-            <div class="sign-line">${params.supervisorName}</div>
-            <div style="font-size: 10px; color: #64748b;">Industry Supervisor Signature</div>
+        <div class="page-container">
+          <div class="header">
+            <div class="title"><strong>Trainee Safety &amp; Transit Audit Report</strong></div>
+            <div class="subtitle">Geofence Compliance &amp; Safe-at-Base Monitoring Log</div>
           </div>
-          <div class="sign-col">
-            <div>Noted & Audited by:</div>
-            <div class="sign-line">${params.coordinatorName}</div>
-            <div style="font-size: 10px; color: #64748b;">OJT Academic Coordinator Signature</div>
+
+          <div class="profile-grid">
+            <div>
+              <div><strong>Trainee Name</strong></div>
+              <div>${params.internName}</div>
+            </div>
+            <div>
+              <div><strong>Total Rendered Hours</strong></div>
+              <div>${params.totalRendered.toFixed(1)} hrs</div>
+            </div>
+            <div>
+              <div><strong>Host Training Company</strong></div>
+              <div>${params.companyName}</div>
+            </div>
+            <div>
+              <div><strong>Company Supervisor</strong></div>
+              <div>${params.supervisorName}</div>
+            </div>
+            <div>
+              <div><strong>Contact Number</strong></div>
+              <div>${params.contactNumber || 'N/A'}</div>
+            </div>
+            <div>
+              <div><strong>OJT Academic Coordinator</strong></div>
+              <div>${params.coordinatorName}</div>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr>
+                <th rowspan="2" style="width: 25px;">#</th>
+                <th rowspan="2" style="width: 70px;">Date</th>
+                <th colspan="2">A.M. Entry</th>
+                <th colspan="2">P.M. Entry</th>
+                <th colspan="2">Undertime</th>
+                <th rowspan="2" style="width: 55px;">Safety Time</th>
+                <th rowspan="2" style="width: 70px;">Safety Status</th>
+                <th rowspan="2">Safety Notes</th>
+              </tr>
+              <tr>
+                <th style="width: 42px;">Arrival</th>
+                <th style="width: 42px;">Departure</th>
+                <th style="width: 42px;">Arrival</th>
+                <th style="width: 42px;">Departure</th>
+                <th style="width: 25px;">Hours</th>
+                <th style="width: 25px;">Mins</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+
+          <div style="font-size: 10px; margin-bottom: 20px;">
+            I certify on my honor that the above monitoring entries correspond to the actual transit and safe-at-base records submitted via the TraiNext system.
+          </div>
+
+          <div class="signatures">
+            <div class="sign-box">
+              <div class="sign-line"><strong>${params.supervisorName}</strong></div>
+              <div style="font-size: 9.5px; margin-top: 2px;">Industry Supervisor Signature</div>
+            </div>
+            <div class="sign-box">
+              <div class="sign-line"><strong>${params.coordinatorName}</strong></div>
+              <div style="font-size: 9.5px; margin-top: 2px;">OJT Academic Coordinator Signature</div>
+            </div>
           </div>
         </div>
       </body>
