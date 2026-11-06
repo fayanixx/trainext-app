@@ -123,20 +123,20 @@ const handleUpdatePassword = async () => {
       <div class="w-full trainext-spec-glass p-6 sm:p-8 flex flex-col rounded-[28px] border border-white/20 bg-[#020408]/40 backdrop-blur-md shadow-2xl">
         
         <!-- HEADINGS -->
-        <div class="mb-6">
+        <div class="mb-5">
           <h1 class="text-white text-[24px] sm:text-[28px] font-bold tracking-[-0.8px] leading-tight">
             {{ isUpdateMode ? 'Set New Password' : 'Reset Password' }}
           </h1>
-          <p class="text-[#00D9FF] text-[12px] sm:text-[12.5px] font-normal mt-1 leading-snug">
+          <p class="text-[#00D9FF] text-[12px] sm:text-[12.5px] font-normal mt-1.5 leading-snug">
             {{ isUpdateMode ? 'Create a secure new password for your account.' : 'Enter your account email to receive recovery instructions.' }}
           </p>
         </div>
 
         <!-- FEEDBACK NOTIFICATIONS -->
-        <div v-if="errorMessage" class="mb-4 p-3 rounded-xl bg-rose-950/70 border border-rose-500/40 text-[11.5px] text-rose-200">
+        <div v-if="errorMessage" class="mb-5 p-3 rounded-xl bg-rose-950/70 border border-rose-500/40 text-[11.5px] text-rose-200">
           {{ errorMessage }}
         </div>
-        <div v-if="successMessage" class="mb-4 p-3 rounded-xl bg-cyan-950/70 border border-cyan-500/40 text-[11.5px] text-cyan-200">
+        <div v-if="successMessage" class="mb-5 p-3 rounded-xl bg-cyan-950/70 border border-cyan-500/40 text-[11.5px] text-cyan-200">
           {{ successMessage }}
         </div>
 
@@ -160,20 +160,20 @@ const handleUpdatePassword = async () => {
             </div>
           </div>
 
-          <div class="flex justify-center mb-6">
+          <div class="flex justify-center mb-5">
             <button 
               type="submit" 
               :disabled="loading"
-              class="trainext-btn-pill-primary w-full sm:w-[220px] h-[42px] text-xs font-bold tracking-wider"
+              class="trainext-btn-pill-primary w-full sm:w-[220px] h-[42px] text-xs font-bold tracking-wider cursor-pointer"
             >
               {{ loading ? 'SENDING...' : 'SEND RESET LINK' }}
             </button>
           </div>
 
-          <div class="text-center">
+          <div class="text-center mt-2">
             <router-link 
               to="/auth"
-              class="text-[9.5px] text-[#858994] hover:text-white tracking-[0.4px] transition flex items-center justify-center gap-1.5 font-semibold uppercase"
+              class="text-[9.5px] text-[#858994] hover:text-white tracking-[0.4px] transition inline-flex items-center justify-center gap-1.5 font-semibold uppercase"
             >
               <svg class="w-3 h-3 text-[#00D9FF]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
@@ -186,7 +186,7 @@ const handleUpdatePassword = async () => {
         <!-- FORM: MODE 2 (UPDATE NEW PASSWORD GALING SA EMAIL) -->
         <form v-else @submit.prevent="handleUpdatePassword" class="flex flex-col">
           <!-- New Password -->
-          <div class="mb-4">
+          <div class="mb-5">
             <label class="block text-[8.5px] font-semibold text-[#cbd5e1] tracking-[1.2px] uppercase mb-1.5">
               NEW PASSWORD
             </label>
@@ -206,7 +206,7 @@ const handleUpdatePassword = async () => {
               <button 
                 type="button" 
                 @click="showPassword = !showPassword"
-                class="text-slate-400 hover:text-white transition p-1"
+                class="text-slate-400 hover:text-white transition p-1 cursor-pointer"
               >
                 <svg v-if="!showPassword" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -239,7 +239,7 @@ const handleUpdatePassword = async () => {
               <button 
                 type="button" 
                 @click="showConfirmPassword = !showConfirmPassword"
-                class="text-slate-400 hover:text-white transition p-1"
+                class="text-slate-400 hover:text-white transition p-1 cursor-pointer"
               >
                 <svg v-if="!showConfirmPassword" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -252,11 +252,11 @@ const handleUpdatePassword = async () => {
             </div>
           </div>
 
-          <div class="flex justify-center mb-6">
+          <div class="flex justify-center mb-5">
             <button 
               type="submit" 
               :disabled="loading"
-              class="trainext-btn-pill-primary w-full sm:w-[230px] h-[42px] text-xs font-bold tracking-wider"
+              class="trainext-btn-pill-primary w-full sm:w-[230px] h-[42px] text-xs font-bold tracking-wider cursor-pointer"
             >
               {{ loading ? 'UPDATING...' : 'SAVE NEW PASSWORD' }}
             </button>
