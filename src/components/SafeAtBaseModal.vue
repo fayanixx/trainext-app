@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import { useAttendanceStore } from '@/stores/attendance';
+import { useToast } from '@/composables/useToast';
 
 /**
  * Component Props & Emits Definition
@@ -9,6 +10,8 @@ const props = defineProps<{
   isOpen: boolean;
   logId: string;
   internId: string;
+  alreadySubmitted?: boolean;
+  existingNotes?: string;
 }>();
 
 const emit = defineEmits<{
@@ -20,6 +23,7 @@ const emit = defineEmits<{
  * Service & Store Instances
  */
 const attendanceStore = useAttendanceStore();
+const toast = useToast();
 
 /**
  * UI State & Asynchronous Controls
@@ -28,11 +32,19 @@ const loading = ref(false);
 const errorMessage = ref('');
 const transitNotes = ref('');
 
+// Sync notes when modal opens or props change
+watch(() => props.isOpen, (open) => {
+  if (open) {
+    transitNotes.value = props.existingNotes || '';
+    errorMessage.value = '';
+  }
+});
+
 /**
  * Confirms Trainee Arrival at Safe Base Quarters with Optional GPS Location Verification
  */
 const confirmSafeAtBase = async () => {
-  if (!props.logId) return;
+  if (!props.logId || props.alreadySubmitted) return;
 
   loading.value = true;
   errorMessage.value = '';
@@ -66,6 +78,7 @@ const confirmSafeAtBase = async () => {
       transitNotes: transitNotes.value.trim() || undefined,
     });
 
+    toast.success('Safe at Base successfully submitted.', 'SUCCESS');
     emit('confirmed');
     emit('close');
   } catch (err: any) {
@@ -92,24 +105,36 @@ const confirmSafeAtBase = async () => {
           </svg>
         </div>
         <div>
-          <h2 class="text-base font-bold text-white tracking-tight">Confirm Safe at Base</h2>
-          <p class="text-[11px] text-[#00d9ff]">Verify arrival at home or safe quarters.</p>
+          <h2 class="text-base font-bold text-white tracking-tight">
+            {{ alreadySubmitted ? 'Safe at Base (Submitted)' : 'Confirm Safe at Base' }}
+          </h2>
+          <p class="text-[11px] text-[#00d9ff]">
+            {{ alreadySubmitted ? 'Already recorded for today.' : 'Verify arrival at home or safe quarters.' }}
+          </p>
         </div>
       </div>
 
       <!-- DESCRIPTION TEXT -->
       <p class="text-xs text-slate-300 leading-relaxed">
-        This marks your shift as officially concluded and confirms to your coordinator and supervisor that you have arrived safely from transit.
+        <template v-if="alreadySubmitted">
+          You have already successfully submitted your Safe at Base check-in for today. Your safety record and transit remarks are securely logged.
+        </template>
+        <template v-else>
+          This marks your shift as officially concluded and confirms to your coordinator and supervisor that you have arrived safely from transit.
+        </template>
       </p>
 
-      <!-- TRANSIT REMARKS FIELD (OPTIONAL) -->
+      <!-- TRANSIT REMARKS FIELD (OPTIONAL / LOCKED IF SUBMITTED) -->
       <div class="flex flex-col gap-1">
-        <label class="trainext-label">OPTIONAL TRANSIT NOTE</label>
+        <label class="trainext-label">
+          {{ alreadySubmitted ? 'SUBMITTED TRANSIT NOTE' : 'OPTIONAL TRANSIT NOTE' }}
+        </label>
         <input 
           v-model="transitNotes"
           type="text"
-          placeholder="e.g. Arrived safely at boarding house"
-          class="w-full h-8 px-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white placeholder:text-[#858994] outline-none focus:border-[#00d9ff]"
+          :disabled="alreadySubmitted"
+          :placeholder="alreadySubmitted ? 'No notes provided' : 'e.g. Arrived safely at boarding house'"
+          class="w-full h-8 px-3 rounded-xl bg-black/40 border border-white/15 text-xs text-white placeholder:text-[#858994] outline-none focus:border-[#00d9ff] disabled:opacity-75 disabled:cursor-not-allowed"
         />
       </div>
 
@@ -120,7 +145,9 @@ const confirmSafeAtBase = async () => {
 
       <!-- ACTION BUTTONS -->
       <div class="flex items-center justify-end gap-2.5 pt-2 border-t border-white/10">
+        <!-- Cancel button para sa hindi pa nagse-submit -->
         <button 
+          v-if="!alreadySubmitted"
           type="button" 
           @click="emit('close')"
           :disabled="loading"
@@ -129,11 +156,23 @@ const confirmSafeAtBase = async () => {
           Cancel
         </button>
 
+        <!-- Pinalitan ng pill button ang Close kapag alreadySubmitted na -->
         <button 
+          v-if="alreadySubmitted"
+          type="button" 
+          @click="emit('close')"
+          class="trainext-btn-pill-primary h-[38px] px-6 text-xs cursor-pointer"
+        >
+          CLOSE
+        </button>
+
+        <!-- Submit button para sa hindi pa nagse-submit -->
+        <button 
+          v-if="!alreadySubmitted"
           type="button" 
           @click="confirmSafeAtBase"
           :disabled="loading"
-          class="trainext-btn-pill-primary h-[38px] px-5 text-xs"
+          class="trainext-btn-pill-primary h-[38px] px-5 text-xs cursor-pointer"
         >
           {{ loading ? 'VERIFYING...' : 'YES, I AM SAFE' }}
         </button>

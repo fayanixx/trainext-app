@@ -108,7 +108,7 @@ const handleUpdatePassword = async () => {
     <!-- Dark Navy/Black Overlay -->
     <div class="fixed inset-0 bg-[#050609]/65 pointer-events-none"></div>
 
-    <div class="w-full max-w-[440px] my-auto relative z-10 flex flex-col items-center">
+    <div class="w-full max-w-[440px] mx-auto my-auto relative z-10 flex flex-col items-center px-4 sm:px-0">
       
       <!-- TRAINEXT BRANDING LOGO -->
       <div class="w-full flex justify-center mb-6">
@@ -124,10 +124,10 @@ const handleUpdatePassword = async () => {
         
         <!-- HEADINGS -->
         <div class="mb-6">
-          <h1 class="text-white text-[28px] font-bold tracking-[-0.8px] leading-tight">
+          <h1 class="text-white text-[24px] sm:text-[28px] font-bold tracking-[-0.8px] leading-tight">
             {{ isUpdateMode ? 'Set New Password' : 'Reset Password' }}
           </h1>
-          <p class="text-[#00D9FF] text-[12.5px] font-normal mt-1 leading-snug">
+          <p class="text-[#00D9FF] text-[12px] sm:text-[12.5px] font-normal mt-1 leading-snug">
             {{ isUpdateMode ? 'Create a secure new password for your account.' : 'Enter your account email to receive recovery instructions.' }}
           </p>
         </div>
@@ -142,7 +142,7 @@ const handleUpdatePassword = async () => {
 
         <!-- FORM: MODE 1 (REQUEST RESET LINK) -->
         <form v-if="!isUpdateMode" @submit.prevent="handleRequestReset" class="flex flex-col">
-          <div class="mb-7">
+          <div class="mb-6">
             <label class="block text-[8.5px] font-semibold text-[#cbd5e1] tracking-[1.2px] uppercase mb-1.5">
               REGISTERED EMAIL
             </label>
@@ -164,7 +164,7 @@ const handleUpdatePassword = async () => {
             <button 
               type="submit" 
               :disabled="loading"
-              class="trainext-btn-pill-primary w-[190px] h-[40px] text-xs"
+              class="trainext-btn-pill-primary w-full sm:w-[220px] h-[42px] text-xs font-bold tracking-wider"
             >
               {{ loading ? 'SENDING...' : 'SEND RESET LINK' }}
             </button>
@@ -206,7 +206,7 @@ const handleUpdatePassword = async () => {
               <button 
                 type="button" 
                 @click="showPassword = !showPassword"
-                class="text-slate-400 hover:text-white transition"
+                class="text-slate-400 hover:text-white transition p-1"
               >
                 <svg v-if="!showPassword" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -220,7 +220,7 @@ const handleUpdatePassword = async () => {
           </div>
 
           <!-- Confirm Password -->
-          <div class="mb-7">
+          <div class="mb-6">
             <label class="block text-[8.5px] font-semibold text-[#cbd5e1] tracking-[1.2px] uppercase mb-1.5">
               CONFIRM NEW PASSWORD
             </label>
@@ -239,7 +239,7 @@ const handleUpdatePassword = async () => {
               <button 
                 type="button" 
                 @click="showConfirmPassword = !showConfirmPassword"
-                class="text-slate-400 hover:text-white transition"
+                class="text-slate-400 hover:text-white transition p-1"
               >
                 <svg v-if="!showConfirmPassword" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -256,7 +256,7 @@ const handleUpdatePassword = async () => {
             <button 
               type="submit" 
               :disabled="loading"
-              class="trainext-btn-pill-primary w-[210px] h-[40px] text-xs font-bold"
+              class="trainext-btn-pill-primary w-full sm:w-[230px] h-[42px] text-xs font-bold tracking-wider"
             >
               {{ loading ? 'UPDATING...' : 'SAVE NEW PASSWORD' }}
             </button>

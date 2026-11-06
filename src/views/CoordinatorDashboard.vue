@@ -117,6 +117,26 @@ const directorySearch = ref('');
 const directoryStatusFilter = ref<'all' | 'on_duty' | 'in_transit' | 'safe_at_base' | 'idle' | 'completed_ojt'>('all');
 
 /**
+ * Custom Solid Dropdown State for Directory Filter (Fixed Mobile Action Sheet Issue)
+ */
+const isDirectoryDropdownOpen = ref(false);
+const selectedDirectoryStatusLabel = computed(() => {
+  switch (directoryStatusFilter.value) {
+    case 'on_duty': return 'On Duty';
+    case 'in_transit': return 'In Transit';
+    case 'safe_at_base': return 'Safe at Base';
+    case 'idle': return 'Idle / Not Checked In';
+    case 'completed_ojt': return '486 Hours Completed';
+    default: return 'Filter: All Statuses';
+  }
+});
+
+const selectDirectoryStatusItem = (val: any) => {
+  directoryStatusFilter.value = val;
+  isDirectoryDropdownOpen.value = false;
+};
+
+/**
  * Performance & Accomplishments Tab Filter Criteria
  */
 const performanceSearch = ref('');
@@ -924,15 +944,63 @@ onUnmounted(() => {
               </button>
             </div>
 
-            <!-- STANDARD SELECT DROPDOWN (CONSISTENT ACROSS WEB & MOBILE) -->
-            <select v-model="directoryStatusFilter" class="trainext-select-glass text-xs h-10 w-full px-3 rounded-xl bg-black/40 border border-white/15 text-white outline-none cursor-pointer">
-              <option value="all" class="bg-[#050811] text-white">Filter: All Statuses</option>
-              <option value="on_duty" class="bg-[#050811] text-white">On Duty</option>
-              <option value="in_transit" class="bg-[#050811] text-white">In Transit</option>
-              <option value="safe_at_base" class="bg-[#050811] text-white">Safe at Base</option>
-              <option value="idle" class="bg-[#050811] text-white">Idle / Not Checked In</option>
-              <option value="completed_ojt" class="bg-[#050811] text-white">486 Hours Completed</option>
-            </select>
+            <!-- CUSTOM SOLID DROPDOWN FILTER (GUARANTEED NO NATIVE ACTION SHEET/RADIO BUTTONS) -->
+            <div class="relative w-full custom-coord-dropdown">
+              <div 
+                @click="isDirectoryDropdownOpen = !isDirectoryDropdownOpen"
+                class="w-full h-[40px] px-3.5 pr-10 rounded-xl bg-[#03050a] border border-white/25 text-white text-[11.5px] flex items-center justify-between cursor-pointer shadow-lg select-none relative"
+              >
+                <span class="truncate pr-2">{{ selectedDirectoryStatusLabel }}</span>
+                <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-[#00d9ff] flex items-center justify-center">
+                  <svg class="w-4 h-4 transition-transform duration-150" :class="{ 'rotate-180': isDirectoryDropdownOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+
+              <!-- SOLID CHOICES MENU -->
+              <div 
+                v-if="isDirectoryDropdownOpen" 
+                class="absolute left-0 right-0 top-full mt-2 rounded-xl bg-[#03050a] border-2 border-[#00d9ff] shadow-[0_10px_30px_rgba(0,0,0,0.95)] z-50 overflow-hidden"
+              >
+                <div 
+                  @click="selectDirectoryStatusItem('all')"
+                  class="px-4 py-3 text-xs text-white hover:bg-[#00d9ff] hover:text-[#03050a] border-b border-white/10 cursor-pointer transition-colors font-medium"
+                >
+                  Filter: All Statuses
+                </div>
+                <div 
+                  @click="selectDirectoryStatusItem('on_duty')"
+                  class="px-4 py-3 text-xs text-white hover:bg-[#00d9ff] hover:text-[#03050a] border-b border-white/10 cursor-pointer transition-colors font-medium"
+                >
+                  On Duty
+                </div>
+                <div 
+                  @click="selectDirectoryStatusItem('in_transit')"
+                  class="px-4 py-3 text-xs text-white hover:bg-[#00d9ff] hover:text-[#03050a] border-b border-white/10 cursor-pointer transition-colors font-medium"
+                >
+                  In Transit
+                </div>
+                <div 
+                  @click="selectDirectoryStatusItem('safe_at_base')"
+                  class="px-4 py-3 text-xs text-white hover:bg-[#00d9ff] hover:text-[#03050a] border-b border-white/10 cursor-pointer transition-colors font-medium"
+                >
+                  Safe at Base
+                </div>
+                <div 
+                  @click="selectDirectoryStatusItem('idle')"
+                  class="px-4 py-3 text-xs text-white hover:bg-[#00d9ff] hover:text-[#03050a] border-b border-white/10 cursor-pointer transition-colors font-medium"
+                >
+                  Idle / Not Checked In
+                </div>
+                <div 
+                  @click="selectDirectoryStatusItem('completed_ojt')"
+                  class="px-4 py-3 text-xs text-white hover:bg-[#00d9ff] hover:text-[#03050a] cursor-pointer transition-colors font-medium"
+                >
+                  486 Hours Completed
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- DIRECTORY LIST -->
@@ -1322,6 +1390,11 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.custom-coord-dropdown {
+  position: relative;
+  user-select: none;
+}
+
 /* PULL TO REFRESH STYLING */
 .pull-refresh-indicator {
   overflow: hidden;
@@ -1439,36 +1512,6 @@ onUnmounted(() => {
 .search-input-field:focus {
   border-color: #00d9ff;
   box-shadow: 0 0 10px rgba(0, 217, 255, 0.25);
-}
-
-/* STANDARD SELECT DROPDOWN FIX FOR MOBILE AND WEB */
-.trainext-select-glass {
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  background-color: rgba(0, 0, 0, 0.45) !important;
-  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2300d9ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-  background-size: 14px;
-  padding-right: 36px !important;
-  border-radius: 12px !important;
-  border: 1px solid rgba(255, 255, 255, 0.14) !important;
-  color: #ffffff !important;
-  font-family: "Aileron", -apple-system, sans-serif !important;
-  font-size: 11.5px !important;
-  outline: none !important;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
-}
-
-.trainext-select-glass:focus {
-  border-color: #00d9ff !important;
-  box-shadow: 0 0 10px rgba(0, 217, 255, 0.25) !important;
-}
-
-.trainext-select-glass option {
-  background-color: #050811 !important;
-  color: #ffffff !important;
 }
 
 /* ERGONOMIC PILL BUTTONS */

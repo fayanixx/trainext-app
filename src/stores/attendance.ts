@@ -4,17 +4,11 @@ import { supabase } from '@/lib/supabase';
 import type { AttendanceLog } from '@/types';
 
 export const useAttendanceStore = defineStore('attendance', () => {
-  /**
-   * Reactive Attendance State
-   */
   const activeShift = ref<AttendanceLog | null>(null);
   const attendanceHistory = ref<AttendanceLog[]>([]);
   const loading = ref(false);
   const errorMessage = ref<string | null>(null);
 
-  /**
-   * Computed Session Statuses para sa 4-Time Entry System
-   */
   const hasAMIn = computed(() => !!activeShift.value?.am_arrival);
   const hasAMOut = computed(() => !!activeShift.value?.am_departure);
   const hasPMIn = computed(() => !!activeShift.value?.pm_arrival);
@@ -24,9 +18,6 @@ export const useAttendanceStore = defineStore('attendance', () => {
     return hasAMIn.value && hasAMOut.value && hasPMIn.value && hasPMOut.value;
   });
 
-  /**
-   * Fetches active shift log for the specified intern on the current calendar date
-   */
   const fetchTodayShift = async (internId: string) => {
     if (!internId) return null;
     loading.value = true;
@@ -56,9 +47,6 @@ export const useAttendanceStore = defineStore('attendance', () => {
     }
   };
 
-  /**
-   * Universal Time Logging para sa Apat na Time Slots (AM In, AM Out, PM In, PM Out)
-   */
   const logAttendanceTime = async (params: {
     internId: string;
     slot: 'am_arrival' | 'am_departure' | 'pm_arrival' | 'pm_departure';
@@ -69,21 +57,39 @@ export const useAttendanceStore = defineStore('attendance', () => {
     errorMessage.value = null;
 
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const currentTimeIso = new Date().toTimeString().split(' ')[0]; // HH:MM:SS format para sa TIME column
+      const now = new Date();
+      const currentHour = now.getHours();
+
+      if (params.slot === 'am_arrival' || params.slot === 'am_departure') {
+        if (currentHour >= 12) {
+          throw new Error('AM attendance is restricted between 12:00 AM and 11:59 AM.');
+        }
+      } else if (params.slot === 'pm_arrival' || params.slot === 'pm_departure') {
+        if (currentHour < 12) {
+          throw new Error('PM attendance opens starting at 12:00 PM.');
+        }
+      }
+
+      const today = now.toISOString().split('T')[0];
+      const currentTimeIso = now.toTimeString().split(' ')[0];
 
       if (!activeShift.value) {
-        if (params.slot !== 'am_arrival') {
-          throw new Error('Kailangan munang mag-Time In (AM Arrival) ngayong umaga.');
-        }
-
         const insertPayload: Record<string, any> = {
           intern_id: params.internId,
           date: today,
-          am_arrival: currentTimeIso,
-          time_in_lat: params.latitude,
-          time_in_lng: params.longitude,
         };
+
+        if (params.slot === 'am_arrival') {
+          insertPayload.am_arrival = currentTimeIso;
+          insertPayload.time_in_lat = params.latitude;
+          insertPayload.time_in_lng = params.longitude;
+        } else if (params.slot === 'pm_arrival') {
+          insertPayload.pm_arrival = currentTimeIso;
+          insertPayload.time_in_lat = params.latitude;
+          insertPayload.time_in_lng = params.longitude;
+        } else {
+          throw new Error('Time in must be recorded before logging departure.');
+        }
 
         const { data, error } = await supabase
           .from('attendance_logs')
@@ -97,26 +103,26 @@ export const useAttendanceStore = defineStore('attendance', () => {
         const updatePayload: Record<string, any> = {};
         
         if (params.slot === 'am_arrival') {
-          if (activeShift.value.am_arrival) throw new Error('Mayroon nang AM Arrival record.');
+          if (activeShift.value.am_arrival) throw new Error('AM Arrival has already been recorded.');
           updatePayload.am_arrival = currentTimeIso;
         } else if (params.slot === 'am_departure') {
-          if (activeShift.value.am_departure) throw new Error('Mayroon nang AM Departure record.');
+          if (activeShift.value.am_departure) throw new Error('AM Departure has already been recorded.');
           updatePayload.am_departure = currentTimeIso;
         } else if (params.slot === 'pm_arrival') {
-          if (activeShift.value.pm_arrival) throw new Error('Mayroon nang PM Arrival record.');
+          if (activeShift.value.pm_arrival) throw new Error('PM Arrival has already been recorded.');
           updatePayload.pm_arrival = currentTimeIso;
         } else if (params.slot === 'pm_departure') {
-          if (activeShift.value.pm_departure) throw new Error('Mayroon nang PM Departure record.');
+          if (activeShift.value.pm_departure) throw new Error('PM Departure has already been recorded.');
           updatePayload.pm_departure = currentTimeIso;
         }
 
         if (params.latitude !== undefined) {
-          if (params.slot === 'am_arrival') updatePayload.time_in_lat = params.latitude;
-          if (params.slot === 'pm_departure') updatePayload.time_out_lat = params.latitude;
+          if (params.slot === 'am_arrival' || params.slot === 'pm_arrival') updatePayload.time_in_lat = params.latitude;
+          if (params.slot === 'am_departure' || params.slot === 'pm_departure') updatePayload.time_out_lat = params.latitude;
         }
         if (params.longitude !== undefined) {
-          if (params.slot === 'am_arrival') updatePayload.time_in_lng = params.longitude;
-          if (params.slot === 'pm_departure') updatePayload.time_out_lng = params.longitude;
+          if (params.slot === 'am_arrival' || params.slot === 'pm_arrival') updatePayload.time_in_lng = params.longitude;
+          if (params.slot === 'am_departure' || params.slot === 'pm_departure') updatePayload.time_out_lng = params.longitude;
         }
 
         const { data, error } = await supabase
@@ -133,16 +139,13 @@ export const useAttendanceStore = defineStore('attendance', () => {
       await fetchAttendanceHistory(params.internId);
       return activeShift.value;
     } catch (err: any) {
-      errorMessage.value = err.message || 'Nabigong maitala ang oras.';
+      errorMessage.value = err.message || 'Failed to record attendance time.';
       throw err;
     } finally {
       loading.value = false;
     }
   };
 
-  /**
-   * Action para sa Safe at Base Confirmation mula sa SafeAtBaseModal.vue
-   */
   const confirmSafeAtBase = async (params: {
     logId?: string;
     internId?: string;
@@ -191,7 +194,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
       }
 
       if (!targetLogId) {
-        throw new Error('Walang nakitang aktibong attendance log para i-update.');
+        throw new Error('No active attendance log found to update.');
       }
 
       const { data, error } = await supabase
@@ -209,16 +212,13 @@ export const useAttendanceStore = defineStore('attendance', () => {
 
       return data;
     } catch (err: any) {
-      errorMessage.value = err.message || 'Nabigong kumpirmahin ang Safe at Base status.';
+      errorMessage.value = err.message || 'Failed to confirm Safe at Base status.';
       throw err;
     } finally {
       loading.value = false;
     }
   };
 
-  /**
-   * Fetches historical attendance logs for an intern ordered chronologically
-   */
   const fetchAttendanceHistory = async (internId: string) => {
     if (!internId) return [];
     loading.value = true;

@@ -20,9 +20,6 @@ import TraiNextSpinner from '@/components/TraiNextSpinner.vue';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-/**
- * Service & Store Instances
- */
 const router = useRouter();
 const authStore = useAuthStore();
 const attendanceStore = useAttendanceStore();
@@ -30,18 +27,12 @@ const accomplishmentsStore = useAccomplishmentsStore();
 const toast = useToast();
 const { coordinates, refreshLocation } = useGeolocation();
 
-/**
- * Global Leaflet Map & Realtime Subscriptions
- */
 let realtimeChannel: any = null;
 let internMap: L.Map | null = null;
 let internUserMarker: L.CircleMarker | null = null;
 let internSiteCircle: L.Circle | null = null;
 let internSiteMarker: L.Marker | null = null;
 
-/**
- * Pull-to-Refresh State Variables
- */
 const touchStartY = ref(0);
 const pullDistance = ref(0);
 const isPulling = ref(false);
@@ -73,7 +64,6 @@ const handleTouchEnd = async () => {
     isRefreshing.value = true;
     try {
       await refreshData();
-      // Toast notification removed during refresh to prevent clutter
     } catch (err: any) {
       toast.error('Failed to sync data.', 'ERROR');
     } finally {
@@ -83,14 +73,10 @@ const handleTouchEnd = async () => {
   pullDistance.value = 0;
 };
 
-/**
- * Manual Data Synchronization Handler for Mobile & Web (Overall Master Sync)
- */
 const handleManualRefresh = async () => {
   isInitialLoading.value = true;
   try {
     await refreshData();
-    // Toast notification removed during manual refresh to prevent clutter
   } catch (err: any) {
     toast.error('Failed to sync data.', 'ERROR');
   } finally {
@@ -98,14 +84,8 @@ const handleManualRefresh = async () => {
   }
 };
 
-/**
- * Active Navigation Tab State ('home' | 'reports' | 'attendance')
- */
 const activeMainTab = ref<'home' | 'reports' | 'attendance'>('home');
 
-/**
- * UI State & Modal Controls
- */
 const isProfileSettingsOpen = ref(false);
 const isAccomplishmentModalOpen = ref(false);
 const isSafeAtBaseModalOpen = ref(false);
@@ -113,31 +93,19 @@ const isProofViewerOpen = ref(false);
 const showSignOutConfirm = ref(false);
 const isSigningOut = ref(false);
 
-/**
- * Accomplishment Detail Modal State
- */
 const isDetailModalOpen = ref(false);
 const selectedLogForDetail = ref<any | null>(null);
 
-/**
- * Document Preview & Audit Export State (DTR Audit & Safe Audit)
- */
 const isReportPreviewOpen = ref(false);
 const previewHtml = ref('');
 const previewDocTitle = ref('');
 const isExportingDtr = ref(false);
 const isExportingSafeAudit = ref(false);
 
-/**
- * Proof Viewer Media State
- */
 const activeProofUrl = ref<string | null>(null);
 const activeProofType = ref<'image' | 'document' | 'video' | null>(null);
 const activeProofTitle = ref('');
 
-/**
- * Supervisor & Company Site Affiliation State
- */
 const supervisorSite = ref<CompanySite | null>(null);
 const supervisorInfo = ref<{ full_name?: string; email?: string } | null>(null);
 const internLinkStatus = ref<'none' | 'pending' | 'approved' | 'rejected'>('none');
@@ -146,25 +114,23 @@ const availableSupervisors = ref<any[]>([]);
 const linkingLoading = ref(false);
 const isInitialLoading = ref(true);
 
-/**
- * Notification Badge Dismissal Tracking Flags
- */
 const hasViewedReportsTab = ref(false);
-
-/**
- * Instant Click Visual Feedback State for Attendance Actions
- */
 const isVerifying = ref(false);
 
-/**
- * Accomplishment Reports Filters
- */
 const activeAccomplishmentTab = ref<'all' | 'pending' | 'approved' | 'rejected'>('all');
 const reportDateFilter = ref<string>('');
 
-/**
- * Geofence Validation Error Modal State
- */
+const isCustomDropdownOpen = ref(false);
+const selectedSupervisorName = computed(() => {
+  const found = availableSupervisors.value.find(s => s.supervisor_id === selectedSupervisorId.value);
+  return found ? `${found.full_name} — ${found.company_name}` : '';
+});
+
+const selectSupervisorItem = (sup: any) => {
+  selectedSupervisorId.value = sup.supervisor_id;
+  isCustomDropdownOpen.value = false;
+};
+
 const geofenceError = ref<{
   isOpen: boolean;
   companyName: string;
@@ -177,9 +143,11 @@ const geofenceError = ref<{
   allowedRadius: 0,
 });
 
-/**
- * Target OJT Rendered Hours Progress Calculation
- */
+// Time window flags: True if current time is PM (12:00 PM to 11:59 PM)
+const isPmTime = computed(() => {
+  return new Date().getHours() >= 12;
+});
+
 const requiredHours = computed(() => {
   return Number((authStore.user as any)?.required_hours) || 486;
 });
@@ -197,26 +165,33 @@ const progressPercentage = computed(() => {
   return Math.min(Math.round(pct), 100);
 });
 
-/**
- * Shift Status Helpers (4-Time Entry System Support)
- */
 const currentShift = computed(() => attendanceStore.activeShift);
 const hasAMIn = computed(() => !!currentShift.value?.am_arrival);
 const hasAMOut = computed(() => !!currentShift.value?.am_departure);
 const hasPMIn = computed(() => !!currentShift.value?.pm_arrival);
 const hasPMOut = computed(() => !!currentShift.value?.pm_departure);
+const hasSafeAtBase = computed(() => !!currentShift.value?.safe_at_base_time);
 
 const currentShiftStatusText = computed(() => {
-  if (!hasAMIn.value) return 'Not Clocked In (AM In Pending)';
+  if (!hasAMIn.value && !hasPMIn.value) return 'Not Clocked In Yet';
   if (hasAMIn.value && !hasAMOut.value) return 'On Duty (AM Shift)';
   if (hasAMOut.value && !hasPMIn.value) return 'Lunch Break / Out';
   if (hasPMIn.value && !hasPMOut.value) return 'On Duty (PM Shift)';
   return 'Shift Completed Today';
 });
 
-/**
- * Helper to Format Timestamp into hrs:mins AM/PM (No seconds)
- */
+// Helper function to check if intern is currently within the site geofence perimeter
+const isWithinGeofence = computed(() => {
+  const site = supervisorSite.value;
+  const lat = coordinates.value?.latitude;
+  const lng = coordinates.value?.longitude;
+  if (!site?.latitude || !site?.longitude || !site?.radius_meters || !lat || !lng) {
+    return false;
+  }
+  const distance = computeDistanceMeters(lat, lng, site.latitude, site.longitude);
+  return distance <= site.radius_meters;
+});
+
 const formatTimeToHoursMinutes = (timestamp: string | null) => {
   if (!timestamp) return 'Not Confirmed';
   try {
@@ -241,17 +216,11 @@ const formatTimeToHoursMinutes = (timestamp: string | null) => {
   }
 };
 
-/**
- * Dynamic Notification Badge Counter for Reports Tab
- */
 const unreadFeedbackCount = computed(() => {
   if (hasViewedReportsTab.value) return 0;
   return accomplishmentsStore.unreadCount || 0;
 });
 
-/**
- * Tab Navigation Event Listener for Auto-Dismissing Badges
- */
 watch(activeMainTab, (newTab) => {
   if (newTab === 'reports') {
     hasViewedReportsTab.value = true;
@@ -259,18 +228,12 @@ watch(activeMainTab, (newTab) => {
   }
 });
 
-/**
- * Reactivate Reports Badge on New Unread Feedback
- */
 watch(() => accomplishmentsStore.unreadCount, (newVal, oldVal) => {
   if (newVal > oldVal && activeMainTab.value !== 'reports') {
     hasViewedReportsTab.value = false;
   }
 });
 
-/**
- * Filtered Accomplishment Reports Feed
- */
 const filteredAccomplishments = computed(() => {
   let list = accomplishmentsStore.logs || [];
   if (activeAccomplishmentTab.value !== 'all') {
@@ -282,9 +245,6 @@ const filteredAccomplishments = computed(() => {
   return list;
 });
 
-/**
- * Renders and Updates Leaflet Geofence Mini-Map for Trainees
- */
 const renderInternGeofenceMap = () => {
   if (activeMainTab.value !== 'home') return;
   nextTick(() => {
@@ -361,9 +321,6 @@ watch(
   { deep: true }
 );
 
-/**
- * Fetches Trainee's Supervisor Affiliation & Company Site
- */
 const fetchAffiliation = async () => {
   if (!authStore.user?.id) return;
 
@@ -432,9 +389,6 @@ const fetchAffiliation = async () => {
   }
 };
 
-/**
- * Requests Affiliation Link to Selected Supervisor
- */
 const requestAffiliation = async () => {
   if (!selectedSupervisorId.value || !authStore.user?.id) return;
   linkingLoading.value = true;
@@ -456,9 +410,6 @@ const requestAffiliation = async () => {
   }
 };
 
-/**
- * Generates Civil Service Form No. 48 DTR Audit Preview
- */
 const handleViewDtrAudit = async () => {
   if (!authStore.user?.id) return;
   isExportingDtr.value = true;
@@ -485,9 +436,6 @@ const handleViewDtrAudit = async () => {
   }
 };
 
-/**
- * Generates Safe Audit Summary Preview with formatted hrs:mins AM/PM time
- */
 const handleViewSafeAudit = async () => {
   if (!authStore.user?.id) return;
   isExportingSafeAudit.value = true;
@@ -532,9 +480,6 @@ const handleViewSafeAudit = async () => {
   }
 };
 
-/**
- * Computes Distance Between Two Coordinates via Haversine Formula
- */
 const computeDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
   const R = 6371e3;
   const φ1 = (lat1 * Math.PI) / 180;
@@ -545,9 +490,6 @@ const computeDistanceMeters = (lat1: number, lon1: number, lat2: number, lon2: n
   return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };
 
-/**
- * Handles 4-Time Entry Attendance Actions (AM In, AM Out, PM In, PM Out)
- */
 const handleTimeSlotAction = async (slot: 'am_arrival' | 'am_departure' | 'pm_arrival' | 'pm_departure') => {
   if (!authStore.user?.id || isVerifying.value || attendanceStore.loading) return;
 
@@ -597,18 +539,16 @@ const handleTimeSlotAction = async (slot: 'am_arrival' | 'am_departure' | 'pm_ar
   }
 };
 
-/**
- * Opens Accomplishment Report Detail Modal
- */
+const handleSafeAtBaseClick = () => {
+  isSafeAtBaseModalOpen.value = true;
+};
+
 const openLogDetail = (log: any) => {
   selectedLogForDetail.value = log;
   accomplishmentsStore.markAsRead(log.id);
   isDetailModalOpen.value = true;
 };
 
-/**
- * Inspects Proof Attachments
- */
 const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: string) => {
   activeProofUrl.value = url;
   activeProofType.value = type;
@@ -616,9 +556,6 @@ const inspectMedia = (url: string, type: 'image' | 'document' | 'video', title: 
   isProofViewerOpen.value = true;
 };
 
-/**
- * Handles Session Sign Out
- */
 const handleSignOut = async () => {
   showSignOutConfirm.value = false;
   isSigningOut.value = true;
@@ -633,9 +570,6 @@ const handleSignOut = async () => {
   }
 };
 
-/**
- * Master Data Refetch Utility (Overall App Sync)
- */
 const refreshData = async () => {
   if (!authStore.user?.id) return;
 
@@ -658,9 +592,6 @@ const refreshData = async () => {
   }
 };
 
-/**
- * Lifecycle Hook: Mounting & Realtime Initialization
- */
 onMounted(async () => {
   isInitialLoading.value = true;
   try {
@@ -712,9 +643,6 @@ onMounted(async () => {
   }
 });
 
-/**
- * Lifecycle Hook: Unmounting & Cleanup
- */
 onUnmounted(() => {
   if (realtimeChannel) supabase.removeChannel(realtimeChannel);
   accomplishmentsStore.unsubscribeRealtime();
@@ -732,7 +660,6 @@ onUnmounted(() => {
     @touchmove="handleTouchMove"
     @touchend="handleTouchEnd"
   >
-    <!-- PULL TO REFRESH INDICATOR -->
     <div 
       class="pull-refresh-indicator"
       :style="{ height: `${pullDistance}px`, opacity: pullDistance > 10 ? 1 : 0 }"
@@ -745,7 +672,6 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- REFRESHING OVERLAY SPINNER -->
     <div v-if="isRefreshing" class="absolute top-2 left-0 right-0 z-50 flex justify-center pointer-events-none">
       <div class="px-4 py-1.5 rounded-full bg-[#050811]/90 border border-cyan-500/40 text-[11px] text-[#00d9ff] font-mono shadow-lg backdrop-blur-md flex items-center gap-2">
         <svg class="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -758,11 +684,9 @@ onUnmounted(() => {
     <div class="trainext-bg-railway" aria-hidden="true"></div>
     <div class="trainext-bg-overlay" aria-hidden="true"></div>
 
-    <!-- FULLSCREEN BRANDED SPINNERS -->
     <TraiNextSpinner v-if="isInitialLoading" label="Loading..." />
     <TraiNextSpinner v-if="isSigningOut" label="Signing Out..." />
 
-    <!-- STICKY HEADER BAR -->
     <header class="trainext-glass-card sticky-intern-header flex items-center justify-between gap-2 px-3.5 sm:px-5 py-3">
       <div class="trainext-brand-group flex items-center gap-2.5 min-w-0">
         <img src="/assets/trainext-logo.png" alt="TraiNext" class="w-8 h-8 sm:w-9 sm:h-9 object-contain shrink-0" />
@@ -775,7 +699,6 @@ onUnmounted(() => {
       </div>
 
       <div class="flex items-center gap-2 shrink-0">
-        <!-- REFRESH BUTTON (Overall App Sync) -->
         <button 
           type="button" 
           @click="handleManualRefresh"
@@ -788,7 +711,6 @@ onUnmounted(() => {
           </svg>
         </button>
 
-        <!-- SETTING BUTTON -->
         <button 
           type="button" 
           @click="isProfileSettingsOpen = true"
@@ -802,7 +724,6 @@ onUnmounted(() => {
           </svg>
         </button>
 
-        <!-- SIGNOUT BUTTON -->
         <button 
           type="button" 
           @click="showSignOutConfirm = true"
@@ -817,7 +738,6 @@ onUnmounted(() => {
     </header>
 
     <div v-show="!isInitialLoading && !isSigningOut" class="trainext-container-layout pt-3">
-      <!-- AFFILIATION BANNER -->
       <section v-if="internLinkStatus !== 'approved'" class="trainext-glass-card flex flex-col gap-3">
         <div class="flex items-center gap-3">
           <svg class="w-6 h-6 text-[#00d9ff] shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -829,20 +749,49 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div v-if="internLinkStatus === 'none'" class="flex flex-col gap-1.5 pt-1">
-          <label class="trainext-label text-[10px]">SELECT SUPERVISOR</label>
-          <div class="flex flex-col sm:flex-row gap-2">
-            <select v-model="selectedSupervisorId" class="trainext-select-glass flex-1 text-xs">
-              <option :value="null" disabled>Choose assigned company supervisor...</option>
-              <option v-for="sup in availableSupervisors" :key="sup.supervisor_id" :value="sup.supervisor_id">
-                {{ sup.full_name }} — {{ sup.company_name }}
-              </option>
-            </select>
+        <div v-if="internLinkStatus === 'none'" class="flex flex-col gap-2.5 pt-2">
+          <label class="trainext-label text-[11px] tracking-wider text-slate-300 font-bold">SELECT SUPERVISOR</label>
+          <div class="flex flex-col sm:flex-row gap-3">
+            
+            <div class="relative flex-1 supervisor-custom-dropdown">
+              <div 
+                @click="isCustomDropdownOpen = !isCustomDropdownOpen"
+                class="w-full h-[48px] px-3.5 pr-11 rounded-xl bg-[#03050a] border border-white/25 text-white text-[11px] sm:text-sm flex items-center justify-between cursor-pointer shadow-lg select-none relative"
+              >
+                <span class="truncate pr-4" :class="{ 'text-slate-400 text-[10.5px] sm:text-sm': !selectedSupervisorId }">
+                  {{ selectedSupervisorName || 'Choose assigned company supervisor...' }}
+                </span>
+                <div class="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-[#00d9ff] flex items-center justify-center">
+                  <svg class="w-4 h-4 transition-transform duration-150" :class="{ 'rotate-180': isCustomDropdownOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+
+              <div 
+                v-if="isCustomDropdownOpen" 
+                class="absolute left-0 right-0 top-full mt-2 rounded-xl bg-[#03050a] border-2 border-[#00d9ff] shadow-[0_10px_30px_rgba(0,0,0,0.95)] z-50 overflow-hidden"
+              >
+                <div 
+                  v-for="sup in availableSupervisors" 
+                  :key="sup.supervisor_id"
+                  @click="selectSupervisorItem(sup)"
+                  class="px-4 py-3 text-xs sm:text-sm text-white hover:bg-[#00d9ff] hover:text-[#03050a] border-b border-white/10 last:border-none cursor-pointer transition-colors font-medium"
+                >
+                  <div class="font-bold">{{ sup.full_name }}</div>
+                  <div class="text-[10.5px] opacity-80 mt-0.5">{{ sup.company_name }}</div>
+                </div>
+                <div v-if="availableSupervisors.length === 0" class="px-4 py-3 text-xs text-slate-400 text-center">
+                  No supervisors available.
+                </div>
+              </div>
+            </div>
+
             <button 
               type="button" 
               @click="requestAffiliation"
               :disabled="!selectedSupervisorId || linkingLoading"
-              class="new-report-pill-btn h-10 px-5 text-xs shrink-0 cursor-pointer"
+              class="new-report-pill-btn h-[48px] px-6 text-xs sm:text-sm shrink-0 cursor-pointer"
             >
               {{ linkingLoading ? 'SENDING...' : 'CONNECT' }}
             </button>
@@ -850,9 +799,7 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <!-- ================= TAB 1: HOME TAB ================= -->
       <div v-show="activeMainTab === 'home'" class="tab-pane-container">
-        <!-- CUMULATIVE PROGRESS -->
         <section class="trainext-glass-card p-4 sm:p-5 flex flex-col gap-2.5">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -878,9 +825,7 @@ onUnmounted(() => {
           </div>
         </section>
 
-        <!-- OFFICE PERIMETER & 4-TIME ENTRY ATTENDANCE PANEL -->
         <section class="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
-          <!-- OFFICE PERIMETER -->
           <div class="trainext-glass-card flex flex-col justify-between gap-1 p-4 sm:p-5">
             <div class="flex items-center justify-between">
               <span class="text-xs sm:text-[12px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
@@ -896,7 +841,6 @@ onUnmounted(() => {
               <p class="text-xs text-[#858994] mt-0.5 truncate">{{ supervisorSite?.office_address || 'Geofence access pending supervisor approval' }}</p>
             </div>
 
-            <!-- MINI MAP -->
             <div v-if="supervisorSite" class="w-full h-52 sm:h-60 rounded-2xl overflow-hidden border border-white/20 relative my-2 shadow-inner">
               <div id="intern-geofence-map" class="w-full h-full z-10"></div>
               <div class="absolute bottom-2.5 left-2.5 z-[400] bg-black/85 backdrop-blur-md px-3 py-1.5 rounded-lg text-[10px] text-slate-200 border border-white/15 flex items-center gap-3 shadow-lg">
@@ -911,16 +855,30 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- 4-TIME ENTRY ATTENDANCE PANEL -->
           <div class="trainext-glass-card flex flex-col justify-between gap-3 p-4 sm:p-5">
-            <div>
-              <span class="text-xs sm:text-[12px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
-                DAILY ATTENDANCE LOG
-              </span>
-              <p class="text-[11px] text-[#858994] mt-0.5">{{ currentShiftStatusText }}</p>
+            <div class="flex items-center justify-between">
+              <div>
+                <span class="text-xs sm:text-[12px] font-bold uppercase tracking-wider text-slate-200 font-['Aileron',sans-serif]">
+                  DAILY ATTENDANCE LOG
+                </span>
+                <p class="text-[11px] text-[#858994] mt-0.5">{{ currentShiftStatusText }}</p>
+              </div>
+
+              <!-- Safe at Base Button: enabled only after PM Out (hasPMOut) -->
+              <button 
+                type="button"
+                @click="handleSafeAtBaseClick"
+                :disabled="!hasPMOut"
+                class="safe-audit-pill-btn cursor-pointer text-[10.5px] h-[30px] px-3 flex items-center gap-1"
+                title="Safe at Base Check-in"
+              >
+                <svg class="w-3 h-3 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+                <span>Safe at Base</span>
+              </button>
             </div>
 
-            <!-- 4 SLOTS STATUS GRID -->
             <div class="grid grid-cols-2 gap-2.5">
               <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
                 <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">AM ARRIVAL</span>
@@ -948,41 +906,68 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- 4 ACTION BUTTONS FOR TIME SLOTS -->
-            <div class="grid grid-cols-2 gap-2 pt-1">
+            <div class="grid grid-cols-2 gap-2.5 pt-1">
+              <!-- AM IN BUTTON -->
               <button 
                 type="button"
                 @click="handleTimeSlotAction('am_arrival')"
-                :disabled="isVerifying || attendanceStore.loading || hasAMIn || internLinkStatus !== 'approved'"
-                class="attendance-slot-btn cursor-pointer"
+                :disabled="isVerifying || attendanceStore.loading || hasAMIn || isPmTime || !isWithinGeofence || internLinkStatus !== 'approved'"
+                class="attendance-slot-btn cursor-pointer flex items-center justify-center gap-2"
               >
+                <svg v-if="isVerifying" class="w-4 h-4 animate-spin text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <svg v-else class="w-4 h-4 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+                </svg>
                 <span>AM IN</span>
               </button>
 
+              <!-- AM OUT BUTTON -->
               <button 
                 type="button"
                 @click="handleTimeSlotAction('am_departure')"
-                :disabled="isVerifying || attendanceStore.loading || !hasAMIn || hasAMOut || internLinkStatus !== 'approved'"
-                class="attendance-slot-btn cursor-pointer"
+                :disabled="isVerifying || attendanceStore.loading || !hasAMIn || hasAMOut || isPmTime || !isWithinGeofence || internLinkStatus !== 'approved'"
+                class="attendance-slot-btn cursor-pointer flex items-center justify-center gap-2"
               >
+                <svg v-if="isVerifying" class="w-4 h-4 animate-spin text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <svg v-else class="w-4 h-4 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
                 <span>AM OUT</span>
               </button>
 
+              <!-- PM IN BUTTON (Independent from AM records, requires PM time & geofence) -->
               <button 
                 type="button"
                 @click="handleTimeSlotAction('pm_arrival')"
-                :disabled="isVerifying || attendanceStore.loading || !hasAMOut || hasPMIn || internLinkStatus !== 'approved'"
-                class="attendance-slot-btn cursor-pointer"
+                :disabled="isVerifying || attendanceStore.loading || hasPMIn || !isPmTime || !isWithinGeofence || internLinkStatus !== 'approved'"
+                class="attendance-slot-btn cursor-pointer flex items-center justify-center gap-2"
               >
+                <svg v-if="isVerifying" class="w-4 h-4 animate-spin text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <svg v-else class="w-4 h-4 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+                </svg>
                 <span>PM IN</span>
               </button>
 
+              <!-- PM OUT BUTTON (Requires PM In to record departure properly) -->
               <button 
                 type="button"
                 @click="handleTimeSlotAction('pm_departure')"
-                :disabled="isVerifying || attendanceStore.loading || !hasPMIn || hasPMOut || internLinkStatus !== 'approved'"
-                class="attendance-slot-btn cursor-pointer"
+                :disabled="isVerifying || attendanceStore.loading || !hasPMIn || hasPMOut || !isPmTime || !isWithinGeofence || internLinkStatus !== 'approved'"
+                class="attendance-slot-btn cursor-pointer flex items-center justify-center gap-2"
               >
+                <svg v-if="isVerifying" class="w-4 h-4 animate-spin text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <svg v-else class="w-4 h-4 text-[#00d9ff]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
                 <span>PM OUT</span>
               </button>
             </div>
@@ -990,17 +975,14 @@ onUnmounted(() => {
         </section>
       </div>
 
-      <!-- ================= TAB 2: REPORTS TAB ================= -->
       <div v-show="activeMainTab === 'reports'" class="tab-pane-container">
         <section class="trainext-glass-card flex flex-col gap-4 p-4 sm:p-5">
-          <!-- TOP BAR -->
           <div class="flex items-center justify-between gap-3">
             <div>
               <h2 class="trainext-title text-sm sm:text-base">Accomplishment Reports</h2>
               <p class="trainext-subtitle text-[11px]">Review daily logs and supervisor verification.</p>
             </div>
 
-            <!-- NEW REPORT BUTTON -->
             <button 
               type="button" 
               @click="isAccomplishmentModalOpen = true"
@@ -1014,7 +996,6 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <!-- DATE FILTER BAR -->
           <div class="flex items-center gap-2 pt-1 w-full">
             <div class="relative flex-1 flex items-center min-w-0">
               <span class="absolute left-3.5 pointer-events-none text-[10px] font-bold text-slate-400 uppercase tracking-wider font-['Aileron',sans-serif]">
@@ -1037,7 +1018,6 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <!-- AUTHVIEW-STYLE TABS -->
           <nav class="report-tabs-nav" aria-label="Accomplishment Filter Tabs">
             <template v-for="(tab, index) in (['all', 'pending', 'approved', 'rejected'] as const)" :key="tab">
               <button 
@@ -1058,7 +1038,6 @@ onUnmounted(() => {
             No reports found for the selected criteria.
           </div>
 
-          <!-- COMPACT REPORT CARDS -->
           <div v-else class="flex flex-col gap-1.5">
             <div 
               v-for="log in filteredAccomplishments" 
@@ -1098,10 +1077,8 @@ onUnmounted(() => {
         </section>
       </div>
 
-      <!-- ================= TAB 3: ATTENDANCE TAB ================= -->
       <div v-show="activeMainTab === 'attendance'" class="tab-pane-container">
         <section class="trainext-glass-card flex flex-col gap-4 p-4 sm:p-5">
-          <!-- HEADER WITH VIEW DTR AUDIT & VIEW SAFE AUDIT BUTTONS IN PINAKANG TAAS -->
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/10">
             <div>
               <h2 class="trainext-title text-sm sm:text-base">Attendance Shift Records (CSC Format)</h2>
@@ -1109,7 +1086,6 @@ onUnmounted(() => {
             </div>
 
             <div class="flex items-center gap-2 shrink-0 self-start sm:self-auto">
-              <!-- View DTR Audit Button -->
               <button 
                 type="button" 
                 @click="handleViewDtrAudit"
@@ -1123,7 +1099,6 @@ onUnmounted(() => {
                 <span>View DTR Audit</span>
               </button>
 
-              <!-- View Safe Audit Button -->
               <button 
                 type="button" 
                 @click="handleViewSafeAudit"
@@ -1180,10 +1155,8 @@ onUnmounted(() => {
       </footer>
     </div>
 
-    <!-- ================= FIXED BOTTOM NAV ================= -->
     <nav class="fixed-bottom-bar" aria-label="Bottom Navigation">
       <div class="bottom-bar-inner">
-        <!-- TAB 1: HOME -->
         <button 
           type="button" 
           @click="activeMainTab = 'home'"
@@ -1199,7 +1172,6 @@ onUnmounted(() => {
           <span v-if="activeMainTab === 'home'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 2: REPORTS -->
         <button 
           type="button" 
           @click="activeMainTab = 'reports'; hasViewedReportsTab = true; accomplishmentsStore.markAllAsRead();"
@@ -1218,14 +1190,13 @@ onUnmounted(() => {
           <span v-if="activeMainTab === 'reports'" class="active-dot"></span>
         </button>
 
-        <!-- TAB 3: ATTENDANCE -->
         <button 
-          type="button" 
-          @click="activeMainTab = 'attendance'"
-          class="bottom-nav-item"
-          :class="{ active: activeMainTab === 'attendance' }"
-          aria-label="Attendance Records"
-        >
+            type="button" 
+            @click="activeMainTab = 'attendance'"
+            class="bottom-nav-item"
+            :class="{ active: activeMainTab === 'attendance' }"
+            aria-label="Attendance Records"
+          >
           <div class="relative flex items-center justify-center">
             <svg class="w-5 h-5 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -1236,7 +1207,6 @@ onUnmounted(() => {
       </div>
     </nav>
 
-    <!-- SIGN OUT CONFIRMATION MODAL -->
     <div 
       v-if="showSignOutConfirm" 
       class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md"
@@ -1276,7 +1246,6 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- MODALS -->
     <AccomplishmentModal 
       :is-open="isAccomplishmentModalOpen"
       :intern-id="authStore.user?.id || ''"
@@ -1303,6 +1272,8 @@ onUnmounted(() => {
       :is-open="isSafeAtBaseModalOpen"
       :log-id="currentShift?.id || ''"
       :intern-id="authStore.user?.id || ''"
+      :already-submitted="hasSafeAtBase"
+      :existing-notes="currentShift?.transit_notes || ''"
       @close="isSafeAtBaseModalOpen = false"
       @confirmed="refreshData"
     />
@@ -1334,7 +1305,11 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* PULL TO REFRESH STYLING */
+.supervisor-custom-dropdown {
+  position: relative;
+  user-select: none;
+}
+
 .pull-refresh-indicator {
   overflow: hidden;
   display: flex;
@@ -1345,7 +1320,6 @@ onUnmounted(() => {
   border-bottom: 1px solid rgba(0, 217, 255, 0.1);
 }
 
-/* STICKY HEADER */
 .sticky-intern-header {
   position: sticky !important;
   top: 0 !important;
@@ -1364,7 +1338,6 @@ onUnmounted(() => {
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
 }
 
-/* TAB CONTAINER SMOOTH TRANSITIONS */
 .tab-pane-container {
   display: flex;
   flex-direction: column;
@@ -1383,7 +1356,6 @@ onUnmounted(() => {
   }
 }
 
-/* MOBILE-SAFE HEADER ACTION BUTTON */
 .header-action-btn {
   height: 34px;
   min-width: 34px;
@@ -1403,7 +1375,6 @@ onUnmounted(() => {
   transform: scale(0.96);
 }
 
-/* NEW REPORT PILL BUTTON */
 .new-report-pill-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -1443,7 +1414,6 @@ onUnmounted(() => {
   filter: grayscale(0.5) !important;
 }
 
-/* SAFE AUDIT PILL BUTTON */
 .safe-audit-pill-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -1483,7 +1453,6 @@ onUnmounted(() => {
   filter: grayscale(0.5) !important;
 }
 
-/* ATTENDANCE 4-SLOT BUTTONS */
 .attendance-slot-btn {
   display: inline-flex !important;
   align-items: center !important;
@@ -1521,7 +1490,6 @@ onUnmounted(() => {
   transform: none !important;
 }
 
-/* MODAL SIGN OUT BUTTON */
 .modal-signout-btn {
   display: inline-flex;
   align-items: center;
@@ -1549,7 +1517,6 @@ onUnmounted(() => {
   transform: scale(0.97);
 }
 
-/* FULL-WIDTH FILTER INPUT */
 .filter-date-input-full {
   height: 36px;
   border-radius: 9999px !important;
@@ -1592,7 +1559,6 @@ onUnmounted(() => {
   border-color: rgba(255, 255, 255, 0.35);
 }
 
-/* COMPACT REPORT ITEM CARDS */
 .report-item-card {
   padding: 14px 16px;
   border-radius: 16px;
@@ -1616,7 +1582,6 @@ onUnmounted(() => {
   transform: scale(0.99);
 }
 
-/* AUTHVIEW-INSPIRED TABS */
 .report-tabs-nav {
   position: relative;
   display: grid;
@@ -1677,7 +1642,6 @@ onUnmounted(() => {
 .report-tabs-nav .tab-divider:nth-of-type(2) { left: 50%; }
 .report-tabs-nav .tab-divider:nth-of-type(3) { left: 75%; }
 
-/* FIXED CYBER-GLASS BOTTOM NAVIGATION */
 .fixed-bottom-bar {
   position: fixed;
   bottom: 0;
