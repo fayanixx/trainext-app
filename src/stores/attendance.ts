@@ -157,11 +157,13 @@ export const useAttendanceStore = defineStore('attendance', () => {
     errorMessage.value = null;
 
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const nowIso = new Date().toISOString();
+      const now = new Date();
+      const today = now.toISOString().split('T')[0];
+      const currentTimeIso = now.toTimeString().split(' ')[0]; // FIXED: Local time format matching other logs
+
       const updatePayload: Record<string, any> = {
         status: 'safe_at_base',
-        safe_at_base_time: nowIso,
+        safe_at_base_time: currentTimeIso,
       };
 
       if (params.transitNotes) {

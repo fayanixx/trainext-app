@@ -193,11 +193,19 @@ const isWithinGeofence = computed(() => {
 const formatTimeToHoursMinutes = (timestamp: string | null) => {
   if (!timestamp) return 'Not Confirmed';
   try {
+    // FIXED: Handle ISO timestamp strings correctly first before checking colons
+    if (timestamp.includes('T') || timestamp.includes('Z')) {
+      const date = new Date(timestamp);
+      if (!isNaN(date.getTime())) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      }
+    }
+
     if (timestamp.includes(':')) {
       const parts = timestamp.split(':');
       if (parts.length >= 2) {
         let hours = parseInt(parts[0], 10);
-        const minutes = parts[1];
+        const minutes = parts[1].slice(0, 2);
         const ampm = hours >= 12 ? 'PM' : 'AM';
         hours = hours % 12;
         hours = hours ? hours : 12;
