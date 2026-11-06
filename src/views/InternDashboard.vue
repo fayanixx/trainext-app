@@ -143,7 +143,6 @@ const geofenceError = ref<{
   allowedRadius: 0,
 });
 
-// Time window flags: True if current time is PM (12:00 PM to 11:59 PM)
 const isPmTime = computed(() => {
   return new Date().getHours() >= 12;
 });
@@ -180,7 +179,6 @@ const currentShiftStatusText = computed(() => {
   return 'Shift Completed Today';
 });
 
-// Helper function to check if intern is currently within the site geofence perimeter
 const isWithinGeofence = computed(() => {
   const site = supervisorSite.value;
   const lat = coordinates.value?.latitude;
@@ -864,7 +862,6 @@ onUnmounted(() => {
                 <p class="text-[11px] text-[#858994] mt-0.5">{{ currentShiftStatusText }}</p>
               </div>
 
-              <!-- Safe at Base Button: enabled only after PM Out (hasPMOut) -->
               <button 
                 type="button"
                 @click="handleSafeAtBaseClick"
@@ -907,7 +904,6 @@ onUnmounted(() => {
             </div>
 
             <div class="grid grid-cols-2 gap-2.5 pt-1">
-              <!-- AM IN BUTTON -->
               <button 
                 type="button"
                 @click="handleTimeSlotAction('am_arrival')"
@@ -923,7 +919,6 @@ onUnmounted(() => {
                 <span>AM IN</span>
               </button>
 
-              <!-- AM OUT BUTTON -->
               <button 
                 type="button"
                 @click="handleTimeSlotAction('am_departure')"
@@ -939,7 +934,6 @@ onUnmounted(() => {
                 <span>AM OUT</span>
               </button>
 
-              <!-- PM IN BUTTON (Independent from AM records, requires PM time & geofence) -->
               <button 
                 type="button"
                 @click="handleTimeSlotAction('pm_arrival')"
@@ -955,7 +949,6 @@ onUnmounted(() => {
                 <span>PM IN</span>
               </button>
 
-              <!-- PM OUT BUTTON (Requires PM In to record departure properly) -->
               <button 
                 type="button"
                 @click="handleTimeSlotAction('pm_departure')"
@@ -996,15 +989,14 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <div class="flex items-center gap-2 pt-1 w-full">
-            <div class="relative flex-1 flex items-center min-w-0">
-              <span class="absolute left-3.5 pointer-events-none text-[10px] font-bold text-slate-400 uppercase tracking-wider font-['Aileron',sans-serif]">
-                Filter Date:
-              </span>
+          <!-- FIXED FILTER DATE ALIGNMENT, LAYOUT & SPACING -->
+          <div class="flex items-center gap-2.5 pt-1 w-full flex-wrap sm:flex-nowrap">
+            <div class="filter-date-wrapper relative flex items-center w-full sm:w-[240px]">
+              <span class="filter-date-prefix">Date:</span>
               <input 
                 v-model="reportDateFilter" 
                 type="date"
-                class="filter-date-input-full w-full pl-24 pr-3 font-mono"
+                class="filter-date-input-refined w-full font-mono"
               />
             </div>
 
@@ -1014,7 +1006,7 @@ onUnmounted(() => {
               @click="reportDateFilter = ''"
               class="clear-date-btn shrink-0 cursor-pointer"
             >
-              Clear
+              Clear Filter
             </button>
           </div>
 
@@ -1517,11 +1509,32 @@ onUnmounted(() => {
   transform: scale(0.97);
 }
 
-.filter-date-input-full {
-  height: 36px;
+/* PERFECTION-ALIGNED FILTER DATE STYLING & THEME INTEGRATION */
+.filter-date-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.filter-date-prefix {
+  position: absolute;
+  left: 14px;
+  z-index: 5;
+  pointer-events: none;
+  font-family: "Aileron", sans-serif;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #00d9ff;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.filter-date-input-refined {
+  height: 38px;
+  padding: 0 14px 0 52px;
   border-radius: 9999px !important;
-  background: rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(0, 217, 255, 0.35);
   color: #ffffff;
   font-size: 11.5px;
   outline: none;
@@ -1529,28 +1542,32 @@ onUnmounted(() => {
   color-scheme: dark;
 }
 
-.filter-date-input-full:focus {
+.filter-date-input-refined:focus {
   border-color: #00d9ff;
-  box-shadow: 0 0 10px rgba(0, 217, 255, 0.25);
+  box-shadow: 0 0 12px rgba(0, 217, 255, 0.3);
 }
 
-.filter-date-input-full::-webkit-calendar-picker-indicator {
+.filter-date-input-refined::-webkit-calendar-picker-indicator {
   cursor: pointer;
-  filter: invert(0.8) sepia(100%) saturate(300%) hue-rotate(150deg);
-  opacity: 0.8;
+  filter: drop-shadow(0 0 4px #00d9ff) invert(0.8) sepia(100%) saturate(500%) hue-rotate(150deg);
+  opacity: 0.9;
+  padding-left: 4px;
 }
 
 .clear-date-btn {
-  height: 28px;
-  padding: 0 12px;
+  height: 38px;
+  padding: 0 16px;
   border-radius: 9999px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.04);
   color: #cbd5e1;
   font-family: "Aileron", sans-serif;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   transition: all 160ms ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .clear-date-btn:hover {
@@ -1702,7 +1719,7 @@ onUnmounted(() => {
   top: -6px;
   right: -9px;
   min-width: 17px;
-  height: 17px;
+  height: 17px5px;
   padding: 0 4px;
   border-radius: 9999px;
   background: #00d9ff;

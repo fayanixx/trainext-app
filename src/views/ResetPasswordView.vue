@@ -123,11 +123,11 @@ const handleUpdatePassword = async () => {
       <div class="w-full trainext-spec-glass p-6 sm:p-8 flex flex-col rounded-[28px] border border-white/20 bg-[#020408]/40 backdrop-blur-md shadow-2xl">
         
         <!-- HEADINGS -->
-        <div class="mb-5">
+        <div class="mb-6">
           <h1 class="text-white text-[24px] sm:text-[28px] font-bold tracking-[-0.8px] leading-tight">
             {{ isUpdateMode ? 'Set New Password' : 'Reset Password' }}
           </h1>
-          <p class="text-[#00D9FF] text-[12px] sm:text-[12.5px] font-normal mt-1.5 leading-snug">
+          <p class="text-[#00D9FF] text-[12px] sm:text-[12.5px] font-normal mt-2 leading-snug">
             {{ isUpdateMode ? 'Create a secure new password for your account.' : 'Enter your account email to receive recovery instructions.' }}
           </p>
         </div>
@@ -142,8 +142,8 @@ const handleUpdatePassword = async () => {
 
         <!-- FORM: MODE 1 (REQUEST RESET LINK) -->
         <form v-if="!isUpdateMode" @submit.prevent="handleRequestReset" class="flex flex-col">
-          <div class="mb-6">
-            <label class="block text-[8.5px] font-semibold text-[#cbd5e1] tracking-[1.2px] uppercase mb-1.5">
+          <div class="mb-7">
+            <label class="block text-[8.5px] font-semibold text-[#cbd5e1] tracking-[1.2px] uppercase mb-2">
               REGISTERED EMAIL
             </label>
             <div class="flex items-center gap-2.5 pb-2 border-b border-white/20 focus-within:border-[#00d9ff] transition">
@@ -160,7 +160,7 @@ const handleUpdatePassword = async () => {
             </div>
           </div>
 
-          <div class="flex justify-center mb-5">
+          <div class="flex justify-center mb-6">
             <button 
               type="submit" 
               :disabled="loading"
@@ -170,7 +170,7 @@ const handleUpdatePassword = async () => {
             </button>
           </div>
 
-          <div class="text-center mt-2">
+          <div class="text-center mt-3">
             <router-link 
               to="/auth"
               class="text-[9.5px] text-[#858994] hover:text-white tracking-[0.4px] transition inline-flex items-center justify-center gap-1.5 font-semibold uppercase"
@@ -186,8 +186,8 @@ const handleUpdatePassword = async () => {
         <!-- FORM: MODE 2 (UPDATE NEW PASSWORD GALING SA EMAIL) -->
         <form v-else @submit.prevent="handleUpdatePassword" class="flex flex-col">
           <!-- New Password -->
-          <div class="mb-5">
-            <label class="block text-[8.5px] font-semibold text-[#cbd5e1] tracking-[1.2px] uppercase mb-1.5">
+          <div class="mb-6">
+            <label class="block text-[8.5px] font-semibold text-[#cbd5e1] tracking-[1.2px] uppercase mb-2">
               NEW PASSWORD
             </label>
             <div class="flex items-center gap-2.5 pb-2 border-b border-white/20 focus-within:border-[#00d9ff] transition">
@@ -220,8 +220,8 @@ const handleUpdatePassword = async () => {
           </div>
 
           <!-- Confirm Password -->
-          <div class="mb-6">
-            <label class="block text-[8.5px] font-semibold text-[#cbd5e1] tracking-[1.2px] uppercase mb-1.5">
+          <div class="mb-7">
+            <label class="block text-[8.5px] font-semibold text-[#cbd5e1] tracking-[1.2px] uppercase mb-2">
               CONFIRM NEW PASSWORD
             </label>
             <div class="flex items-center gap-2.5 pb-2 border-b border-white/20 focus-within:border-[#00d9ff] transition">
@@ -252,7 +252,7 @@ const handleUpdatePassword = async () => {
             </div>
           </div>
 
-          <div class="flex justify-center mb-5">
+          <div class="flex justify-center mb-6">
             <button 
               type="submit" 
               :disabled="loading"

@@ -26,6 +26,43 @@ export interface IndividualLogRecord {
   transit_notes?: string | null;
 }
 
+/**
+ * Global Helper to format timestamps and time strings accurately to Philippine Standard Time (12-hour format)
+ */
+export function formatTime(timeStr?: string | null, fallback = ''): string {
+  if (!timeStr) return fallback;
+  try {
+    let dateObj: Date;
+    if (timeStr.includes('T') || timeStr.includes('-')) {
+      dateObj = new Date(timeStr);
+    } else {
+      const parts = timeStr.split(':');
+      if (parts.length >= 2) {
+        const h = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        dateObj = new Date();
+        dateObj.setHours(h, m, 0, 0);
+      } else {
+        return timeStr;
+      }
+    }
+    if (isNaN(dateObj.getTime())) return timeStr;
+    
+    // Pilitin nating gamitin ang Asia/Manila time zone upang laging tumpak sa PH time
+    return new Intl.DateTimeFormat('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'Asia/Manila',
+    }).format(dateObj);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * CSV Exporter Utility
+ */
 export function exportToCsv(filename: string, rows: Record<string, any>[]): void {
   if (!rows || !rows.length) return;
 
@@ -62,6 +99,9 @@ export function exportToCsv(filename: string, rows: Record<string, any>[]): void
   URL.revokeObjectURL(url);
 }
 
+/**
+ * 1. Coordinator Master Summary Report HTML (A4 Portrait, Pastel Blue Headers, Target/Rendered/Remaining/Status)
+ */
 export function generateMasterReportHtml(params: {
   coordinatorName: string;
   batchTitle?: string;
@@ -204,30 +244,6 @@ function buildSingleDtrBlockHtml(params: {
   monthName: string;
   logs: IndividualLogRecord[];
 }): string {
-  const formatTime = (timeStr?: string | null) => {
-    if (!timeStr) return '';
-    try {
-      let dateObj: Date;
-      if (timeStr.includes('T') || timeStr.includes('-')) {
-        dateObj = new Date(timeStr);
-      } else {
-        const parts = timeStr.split(':');
-        if (parts.length >= 2) {
-          const h = parseInt(parts[0], 10);
-          const m = parseInt(parts[1], 10);
-          dateObj = new Date();
-          dateObj.setHours(h, m, 0, 0);
-        } else {
-          return timeStr;
-        }
-      }
-      if (isNaN(dateObj.getTime())) return timeStr;
-      return dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-    } catch {
-      return '';
-    }
-  };
-
   const logMap = new Map<number, IndividualLogRecord>();
   params.logs.forEach((log) => {
     if (log.date) {
@@ -252,7 +268,6 @@ function buildSingleDtrBlockHtml(params: {
   for (let day = 1; day <= 31; day++) {
     const log = logMap.get(day);
     
-    // Suriin kung ang araw o oras ay lumipas na
     let isPastDay = false;
     let isToday = false;
 
@@ -269,12 +284,10 @@ function buildSingleDtrBlockHtml(params: {
     const hasAmRecord = log && (log.am_arrival || (log.time_in && parseInt(log.time_in.split(':')[0], 10) < 12));
     const hasPmRecord = log && (log.pm_arrival || log.pm_departure || log.time_out);
 
-    // Para sa AM slots (lumipas na ang araw O ngayong araw na lampas na ng tanghali/12 PM)
     const shouldExpireAm = isPastDay || (isToday && currentHour >= 12);
     const amArr = log && hasAmRecord ? formatTime(log.am_arrival || log.time_in) : (shouldExpireAm ? '—' : '');
     const amDep = log && hasAmRecord ? formatTime(log.am_departure) : (shouldExpireAm ? '—' : '');
     
-    // Para sa PM slots (lumipas na ang araw O ngayong araw na tapos na ang oras ng hapon, halimbawa lampas 6 PM o gabi na)
     const shouldExpirePm = isPastDay || (isToday && currentHour >= 18);
     const pmArr = log && hasPmRecord ? formatTime(log.pm_arrival) : (shouldExpirePm ? '—' : '');
     const pmDep = log && hasPmRecord ? formatTime(log.pm_departure || log.time_out) : (shouldExpirePm ? '—' : '');
@@ -361,6 +374,9 @@ function buildSingleDtrBlockHtml(params: {
   `;
 }
 
+/**
+ * 2. Official Daily Time Record (DTR Audit)
+ */
 export function generateCivilServiceDtrHtml(params: {
   internName: string;
   companyName: string;
@@ -519,6 +535,9 @@ export function generateCivilServiceDtrHtml(params: {
   `;
 }
 
+/**
+ * 3. TraiNext Safety Audit Report 
+ */
 export function generateSafetyAuditHtml(params: {
   internName: string;
   companyName: string;
@@ -528,37 +547,13 @@ export function generateSafetyAuditHtml(params: {
   totalRendered: number;
   logs: IndividualLogRecord[];
 }): string {
-  const formatTime = (timeStr?: string | null) => {
-    if (!timeStr) return '—';
-    try {
-      let dateObj: Date;
-      if (timeStr.includes('T') || timeStr.includes('-')) {
-        dateObj = new Date(timeStr);
-      } else {
-        const parts = timeStr.split(':');
-        if (parts.length >= 2) {
-          const h = parseInt(parts[0], 10);
-          const m = parseInt(parts[1], 10);
-          dateObj = new Date();
-          dateObj.setHours(h, m, 0, 0);
-        } else {
-          return timeStr;
-        }
-      }
-      if (isNaN(dateObj.getTime())) return timeStr;
-      return dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-    } catch {
-      return '—';
-    }
-  };
-
   const rowsHtml = params.logs.length === 0 
     ? `<tr><td colspan="11" style="text-align: center; padding: 20px; color: #64748b;">No safety or transit logs recorded yet.</td></tr>`
     : params.logs
         .map((log, index) => {
           const hasAmRecord = log.am_arrival || (log.time_in && parseInt(log.time_in.split(':')[0], 10) < 12);
-          const amArr = hasAmRecord ? formatTime(log.am_arrival || log.time_in) : '—';
-          const amDep = hasAmRecord ? formatTime(log.am_departure) : '—';
+          const amArr = hasAmRecord ? formatTime(log.am_arrival || log.time_in, '—') : '—';
+          const amDep = hasAmRecord ? formatTime(log.am_departure, '—') : '—';
 
           return `
         <tr>
@@ -566,11 +561,11 @@ export function generateSafetyAuditHtml(params: {
           <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${log.date}</td>
           <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${amArr}</td>
           <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${amDep}</td>
-          <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${formatTime(log.pm_arrival)}</td>
-          <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${formatTime(log.pm_departure || log.time_out)}</td>
+          <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${formatTime(log.pm_arrival, '—')}</td>
+          <td style="border: 1px solid #000; padding: 4px; font-family: monospace; text-align: center;">${formatTime(log.pm_departure || log.time_out, '—')}</td>
           <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${log.under_time_hours || 0}</td>
           <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${log.under_time_minutes || 0}</td>
-          <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${formatTime(log.safe_at_base_time)}</td>
+          <td style="border: 1px solid #000; padding: 4px; text-align: center; font-family: monospace;">${formatTime(log.safe_at_base_time, '—')}</td>
           <td style="border: 1px solid #000; padding: 4px; text-align: center; font-size: 9px;">
             ${log.safe_at_base_time ? 'Safe At Base' : 'Pending'}
           </td>

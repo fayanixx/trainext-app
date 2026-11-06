@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onUnmounted } from 'vue';
+import { ref, computed } from 'vue';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -12,13 +12,12 @@ const emit = defineEmits<{
 }>();
 
 const previewFrame = ref<HTMLIFrameElement | null>(null);
-const blobUrl = ref<string>('');
-const isRendering = ref(true);
+const isRendering = ref(false);
 
-const createResponsiveBlob = (rawHtml: string): string => {
-  if (!rawHtml) return '';
-
-  const responsiveHtml = `
+// I-wrap ang raw HTML sa responsive mobile-friendly container para sa iframe srcdoc
+const framedHtmlContent = computed(() => {
+  if (!props.htmlContent) return '';
+  return `
     <!DOCTYPE html>
     <html lang="en">
     <head>
@@ -37,7 +36,7 @@ const createResponsiveBlob = (rawHtml: string): string => {
           -webkit-text-size-adjust: 100%;
         }
         body {
-          padding: 16px;
+          padding: 12px;
           overflow-x: auto;
         }
         @media print {
@@ -53,45 +52,20 @@ const createResponsiveBlob = (rawHtml: string): string => {
       </style>
     </head>
     <body>
-      ${rawHtml}
+      ${props.htmlContent}
     </body>
     </html>
   `;
-
-  const blob = new Blob([responsiveHtml], { type: 'text/html;charset=utf-8' });
-  return URL.createObjectURL(blob);
-};
-
-watch(
-  () => [props.isOpen, props.htmlContent],
-  ([open, content]) => {
-    if (open && content) {
-      isRendering.value = true;
-      if (blobUrl.value) {
-        URL.revokeObjectURL(blobUrl.value);
-      }
-      blobUrl.value = createResponsiveBlob(content as string);
-    }
-  },
-  { immediate: true }
-);
-
-onUnmounted(() => {
-  if (blobUrl.value) {
-    URL.revokeObjectURL(blobUrl.value);
-    blobUrl.value = '';
-  }
 });
 
 const handlePrintFromFrame = () => {
-  if (previewFrame.value?.contentWindow) {
-    previewFrame.value.contentWindow.focus();
-    previewFrame.value.contentWindow.print();
-  } else if (blobUrl.value) {
-    const printWindow = window.open(blobUrl.value, '_blank');
-    if (printWindow) {
-      printWindow.focus();
+  try {
+    if (previewFrame.value?.contentWindow) {
+      previewFrame.value.contentWindow.focus();
+      previewFrame.value.contentWindow.print();
     }
+  } catch (err) {
+    console.warn('Direct frame print restricted on mobile device.', err);
   }
 };
 </script>
@@ -99,12 +73,12 @@ const handlePrintFromFrame = () => {
 <template>
   <div 
     v-if="isOpen" 
-    class="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-5 bg-black/90 backdrop-blur-md select-none overflow-y-auto"
+    class="fixed inset-0 z-[9999] flex items-center justify-center p-2 sm:p-5 bg-black/90 backdrop-blur-md select-none overflow-y-auto"
   >
-    <div class="w-full max-w-4xl h-[90vh] my-auto rounded-[24px] bg-[#050811]/95 border border-white/15 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+    <div class="w-full max-w-4xl h-[92vh] sm:h-[90vh] my-auto rounded-[24px] bg-[#050811]/95 border border-white/15 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
       
       <!-- MODAL TOP BAR -->
-      <header class="px-5 py-3.5 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.015] shrink-0">
+      <header class="px-4 sm:px-5 py-3.5 border-b border-white/10 flex items-center justify-between gap-3 bg-white/[0.015] shrink-0">
         <div class="flex items-center gap-2.5 min-w-0">
           <div class="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-[#00d9ff] shrink-0">
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -112,7 +86,7 @@ const handlePrintFromFrame = () => {
             </svg>
           </div>
           <div class="min-w-0">
-            <p class="text-[20px] font-bold text-white tracking-wide truncate font-['Aileron',sans-serif]">
+            <p class="text-[15px] sm:text-[18px] font-bold text-white tracking-wide truncate font-['Aileron',sans-serif]">
               {{ title || 'Document Verification Preview' }}
             </p>
             <p class="text-[10px] text-[#00d9ff] font-mono tracking-wider">
@@ -149,24 +123,15 @@ const handlePrintFromFrame = () => {
       </header>
 
       <!-- PREVIEW FRAME CONTAINER -->
-      <div class="flex-1 p-3 sm:p-5 bg-black/60 overflow-hidden flex justify-center relative">
+      <div class="flex-1 p-2 sm:p-5 bg-black/60 overflow-hidden flex justify-center relative">
         <div class="w-full max-w-[820px] h-full rounded-2xl bg-white shadow-2xl overflow-hidden border border-white/10 relative">
-          <!-- Loading Spinner -->
-          <div 
-            v-if="isRendering" 
-            class="absolute inset-0 bg-[#070b12] flex flex-col items-center justify-center gap-2.5 z-10"
-          >
-            <div class="spinner-ring border-[#00d9ff]"></div>
-            <span class="text-xs font-mono text-slate-400 tracking-wider">Rendering preview...</span>
-          </div>
-
+          
           <iframe 
             ref="previewFrame"
-            :src="blobUrl"
-            class="w-full h-full border-0"
+            :srcdoc="framedHtmlContent"
+            class="w-full h-full border-0 bg-white"
             title="PDF Document Preview"
             sandbox="allow-same-origin allow-scripts allow-modals"
-            @load="isRendering = false"
           ></iframe>
         </div>
       </div>
@@ -176,14 +141,13 @@ const handlePrintFromFrame = () => {
 </template>
 
 <style scoped>
-/* CYAN PILL PRINT ACTION BUTTON */
 .pill-cyan-btn {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
   gap: 6px !important;
   height: 34px !important;
-  padding: 0 16px !important;
+  padding: 0 14px !important;
   border-radius: 9999px !important;
   border: 1px solid rgba(0, 217, 255, 0.5) !important;
   background: rgba(0, 217, 255, 0.12) !important;
@@ -208,22 +172,5 @@ const handlePrintFromFrame = () => {
 
 .pill-cyan-btn:active:not(:disabled) {
   transform: scale(0.96) !important;
-}
-
-/* SPINNER RING */
-.spinner-ring {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  border-width: 2px;
-  border-style: solid;
-  border-top-color: transparent !important;
-  animation: spin 0.75s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 </style>
