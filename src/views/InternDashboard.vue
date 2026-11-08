@@ -146,11 +146,32 @@ const requiredHours = computed(() => {
   return Number((authStore.user as any)?.required_hours) || 486;
 });
 
+// Ayusin ang types para tumanggap ng string | null | undefined para maiwasan ang TS2345 error
+const calculateHoursBetween = (start: string | null | undefined, end: string | null | undefined): number => {
+  if (!start || !end) return 0;
+  try {
+    const [startH, startM] = start.split(':').map(Number);
+    const [endH, endM] = end.split(':').map(Number);
+    if (isNaN(startH) || isNaN(startM) || isNaN(endH) || isNaN(endM)) return 0;
+    const startMinutes = startH * 60 + startM;
+    const endMinutes = endH * 60 + endM;
+    const diff = endMinutes - startMinutes;
+    return diff > 0 ? diff / 60 : 0;
+  } catch {
+    return 0;
+  }
+};
+
 const renderedHours = computed(() => {
-  return (attendanceStore.attendanceHistory || []).reduce(
-    (acc, log) => acc + (Number(log.hours_rendered) || 0),
-    0
-  );
+  return (attendanceStore.attendanceHistory || []).reduce((acc, log) => {
+    const hours = Number(log.hours_rendered);
+    if (!isNaN(hours) && hours > 0) {
+      return acc + hours;
+    }
+    const am = calculateHoursBetween(log.am_arrival, log.am_departure);
+    const pm = calculateHoursBetween(log.pm_arrival, log.pm_departure);
+    return acc + am + pm;
+  }, 0);
 });
 
 const progressPercentage = computed(() => {
@@ -1134,7 +1155,9 @@ onUnmounted(() => {
 
               <div class="sm:text-right flex items-center justify-between sm:justify-end gap-2 border-t sm:border-t-0 border-white/10 pt-2 sm:pt-0">
                 <span class="text-[8px] font-bold uppercase tracking-wider text-[#858994] block sm:inline">RENDERED:</span>
-                <span class="text-xs font-bold text-[#00d9ff] font-mono">{{ Number(hist.hours_rendered || 0).toFixed(1) }} hrs</span>
+                <span class="text-xs font-bold text-[#00d9ff] font-mono">
+                  {{ Number(hist.hours_rendered || (calculateHoursBetween(hist.am_arrival ?? null, hist.am_departure ?? null) + calculateHoursBetween(hist.pm_arrival ?? null, hist.pm_departure ?? null))).toFixed(1) }} hrs
+                </span>
               </div>
             </div>
           </div>

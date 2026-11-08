@@ -18,6 +18,28 @@ export const useAttendanceStore = defineStore('attendance', () => {
     return hasAMIn.value && hasAMOut.value && hasPMIn.value && hasPMOut.value;
   });
 
+  // Helper para kalkulahin ang oras sa pagitan ng arrival at departure
+  const calculateHoursBetween = (start: string | null, end: string | null): number => {
+    if (!start || !end) return 0;
+    try {
+      const [startH, startM] = start.split(':').map(Number);
+      const [endH, endM] = end.split(':').map(Number);
+      if (isNaN(startH) || isNaN(startM) || isNaN(endH) || isNaN(endM)) return 0;
+      const startMinutes = startH * 60 + startM;
+      const endMinutes = endH * 60 + endM;
+      const diff = endMinutes - startMinutes;
+      return diff > 0 ? diff / 60 : 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  const computeLogHours = (log: any) => {
+    const am = calculateHoursBetween(log.am_arrival, log.am_departure);
+    const pm = calculateHoursBetween(log.pm_arrival, log.pm_departure);
+    return Number((am + pm).toFixed(2));
+  };
+
   const fetchTodayShift = async (internId: string) => {
     if (!internId) return null;
     loading.value = true;
@@ -91,6 +113,8 @@ export const useAttendanceStore = defineStore('attendance', () => {
           throw new Error('Time in must be recorded before logging departure.');
         }
 
+        insertPayload.hours_rendered = computeLogHours(insertPayload);
+
         const { data, error } = await supabase
           .from('attendance_logs')
           .insert([insertPayload])
@@ -124,6 +148,9 @@ export const useAttendanceStore = defineStore('attendance', () => {
           if (params.slot === 'am_arrival' || params.slot === 'pm_arrival') updatePayload.time_in_lng = params.longitude;
           if (params.slot === 'am_departure' || params.slot === 'pm_departure') updatePayload.time_out_lng = params.longitude;
         }
+
+        const mergedLog = { ...activeShift.value, ...updatePayload };
+        updatePayload.hours_rendered = computeLogHours(mergedLog);
 
         const { data, error } = await supabase
           .from('attendance_logs')
@@ -159,7 +186,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
     try {
       const now = new Date();
       const today = now.toISOString().split('T')[0];
-      const currentIsoTimestamp = now.toISOString(); // FIXED: Gamitin ang buong ISO timestamp para tugma sa timestamp with time zone ng database
+      const currentIsoTimestamp = now.toISOString();
 
       const updatePayload: Record<string, any> = {
         status: 'safe_at_base',

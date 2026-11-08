@@ -196,6 +196,24 @@ const internsList = ref<InternRecord[]>([]);
 const allReviewedReports = ref<AccomplishmentReportItem[]>([]);
 
 /**
+ * Helper para kalkulahin ang oras sa pagitan ng arrival at departure
+ */
+const calculateHoursBetween = (start: string | null | undefined, end: string | null | undefined): number => {
+  if (!start || !end) return 0;
+  try {
+    const [startH, startM] = start.split(':').map(Number);
+    const [endH, endM] = end.split(':').map(Number);
+    if (isNaN(startH) || isNaN(startM) || isNaN(endH) || isNaN(endM)) return 0;
+    const startMinutes = startH * 60 + startM;
+    const endMinutes = endH * 60 + endM;
+    const diff = endMinutes - startMinutes;
+    return diff > 0 ? diff / 60 : 0;
+  } catch {
+    return 0;
+  }
+};
+
+/**
  * Computed Real-Time Cohort Metrics
  */
 const totalInterns = computed(() => internsList.value.length);
@@ -346,7 +364,7 @@ const fetchMasterData = async () => {
         .eq('role', 'supervisor'),
       supabase
         .from('attendance_logs')
-        .select('id, intern_id, date, status, time_in, time_out, safe_at_base_time, transit_notes, hours_rendered')
+        .select('id, intern_id, date, status, time_in, time_out, safe_at_base_time, transit_notes, hours_rendered, am_arrival, am_departure, pm_arrival, pm_departure')
         .in('intern_id', internIds),
       supabase
         .from('accomplishment_reports')
@@ -393,10 +411,14 @@ const fetchMasterData = async () => {
       const logs = attendance.filter((a: any) => a.intern_id === intern.id);
       const todayLog = logs.find((l: any) => l.date === today);
 
-      const totalHours = logs.reduce(
-        (sum: number, l: any) => sum + (Number(l.hours_rendered) || 0),
-        0
-      );
+      // Inayos ang total hours calculation gamit ang fallback logic (hours_rendered o kalkulahin mula sa AM/PM arrival/departure)
+      const totalHours = logs.reduce((sum: number, l: any) => {
+        const h = Number(l.hours_rendered);
+        if (!isNaN(h) && h > 0) return sum + h;
+        const am = calculateHoursBetween(l.am_arrival, l.am_departure);
+        const pm = calculateHoursBetween(l.pm_arrival, l.pm_departure);
+        return sum + am + pm;
+      }, 0);
 
       const isCompleted = totalHours >= 486;
       const traineeReports = allReviewedReports.value.filter((r) => r.intern_id === intern.id);
@@ -411,7 +433,7 @@ const fetchMasterData = async () => {
         supervisor_name: affiliationLabel,
         company_name: finalCompany,
         today_status: todayLog ? todayLog.status : 'idle',
-        total_hours: totalHours,
+        total_hours: Number(totalHours.toFixed(1)),
         time_in: todayLog?.time_in,
         time_out: todayLog?.time_out,
         safe_at_base_time: todayLog?.safe_at_base_time,
