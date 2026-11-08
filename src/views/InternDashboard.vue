@@ -64,7 +64,7 @@ const handleTouchEnd = async () => {
     isRefreshing.value = true;
     try {
       await refreshData();
-    } catch (err: any) {
+    } catch {
       toast.error('Failed to sync data.', 'ERROR');
     } finally {
       isRefreshing.value = false;
@@ -77,7 +77,7 @@ const handleManualRefresh = async () => {
   isInitialLoading.value = true;
   try {
     await refreshData();
-  } catch (err: any) {
+  } catch {
     toast.error('Failed to sync data.', 'ERROR');
   } finally {
     isInitialLoading.value = false;
@@ -131,12 +131,7 @@ const selectSupervisorItem = (sup: any) => {
   isCustomDropdownOpen.value = false;
 };
 
-const geofenceError = ref<{
-  isOpen: boolean;
-  companyName: string;
-  formattedDistance: string;
-  allowedRadius: number;
-}>({
+const geofenceError = ref({
   isOpen: false,
   companyName: '',
   formattedDistance: '0m',
@@ -193,7 +188,6 @@ const isWithinGeofence = computed(() => {
 const formatTimeToHoursMinutes = (timestamp: string | null) => {
   if (!timestamp) return 'Not Confirmed';
   try {
-    // FIXED: Handle ISO timestamp strings correctly first before checking colons
     if (timestamp.includes('T') || timestamp.includes('Z')) {
       const date = new Date(timestamp);
       if (!isNaN(date.getTime())) {
@@ -568,8 +562,7 @@ const handleSignOut = async () => {
   try {
     await authStore.signOut();
     router.replace('/auth');
-  } catch (err: any) {
-    console.error('Sign out error:', err.message);
+  } catch {
     toast.error('Failed to cleanly terminate session.', 'SIGN OUT ERROR');
   } finally {
     isSigningOut.value = false;
@@ -997,7 +990,6 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <!-- FIXED FILTER DATE ALIGNMENT, LAYOUT & SPACING -->
           <div class="flex items-center gap-2.5 pt-1 w-full flex-wrap sm:flex-nowrap">
             <div class="filter-date-wrapper relative flex items-center w-full sm:w-[240px]">
               <span class="filter-date-prefix">Date:</span>
@@ -1517,7 +1509,6 @@ onUnmounted(() => {
   transform: scale(0.97);
 }
 
-/* PERFECTION-ALIGNED FILTER DATE STYLING & THEME INTEGRATION */
 .filter-date-wrapper {
   position: relative;
   display: flex;
@@ -1727,7 +1718,7 @@ onUnmounted(() => {
   top: -6px;
   right: -9px;
   min-width: 17px;
-  height: 17px5px;
+  height: 17px;
   padding: 0 4px;
   border-radius: 9999px;
   background: #00d9ff;

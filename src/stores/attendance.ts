@@ -159,11 +159,11 @@ export const useAttendanceStore = defineStore('attendance', () => {
     try {
       const now = new Date();
       const today = now.toISOString().split('T')[0];
-      const currentTimeIso = now.toTimeString().split(' ')[0]; // FIXED: Local time format matching other logs
+      const currentIsoTimestamp = now.toISOString(); // FIXED: Gamitin ang buong ISO timestamp para tugma sa timestamp with time zone ng database
 
       const updatePayload: Record<string, any> = {
         status: 'safe_at_base',
-        safe_at_base_time: currentTimeIso,
+        safe_at_base_time: currentIsoTimestamp,
       };
 
       if (params.transitNotes) {
