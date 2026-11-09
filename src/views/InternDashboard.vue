@@ -146,7 +146,6 @@ const requiredHours = computed(() => {
   return Number((authStore.user as any)?.required_hours) || 486;
 });
 
-// Ayusin ang types para tumanggap ng string | null | undefined para maiwasan ang TS2345 error
 const calculateHoursBetween = (start: string | null | undefined, end: string | null | undefined): number => {
   if (!start || !end) return 0;
   try {
@@ -181,13 +180,23 @@ const progressPercentage = computed(() => {
 });
 
 const currentShift = computed(() => attendanceStore.activeShift);
-const hasAMIn = computed(() => !!currentShift.value?.am_arrival);
-const hasAMOut = computed(() => !!currentShift.value?.am_departure);
-const hasPMIn = computed(() => !!currentShift.value?.pm_arrival);
-const hasPMOut = computed(() => !!currentShift.value?.pm_departure);
-const hasSafeAtBase = computed(() => !!currentShift.value?.safe_at_base_time);
+
+// Eksaktong petsa ngayon para sa pag-verify ng bagong araw
+const isShiftForToday = computed(() => {
+  if (!currentShift.value?.date) return false;
+  const todayStr = new Date().toISOString().split('T')[0];
+  return currentShift.value.date === todayStr;
+});
+
+// Kung hindi para sa araw na ito ang shift, magiging false ang mga ito para blangko at ready para sa bagong pasok
+const hasAMIn = computed(() => isShiftForToday.value && !!currentShift.value?.am_arrival);
+const hasAMOut = computed(() => isShiftForToday.value && !!currentShift.value?.am_departure);
+const hasPMIn = computed(() => isShiftForToday.value && !!currentShift.value?.pm_arrival);
+const hasPMOut = computed(() => isShiftForToday.value && !!currentShift.value?.pm_departure);
+const hasSafeAtBase = computed(() => isShiftForToday.value && !!currentShift.value?.safe_at_base_time);
 
 const currentShiftStatusText = computed(() => {
+  if (!isShiftForToday.value) return 'Ready for Today’s Shift (AM In)';
   if (!hasAMIn.value && !hasPMIn.value) return 'Not Clocked In Yet';
   if (hasAMIn.value && !hasAMOut.value) return 'On Duty (AM Shift)';
   if (hasAMOut.value && !hasPMIn.value) return 'Lunch Break / Out';
@@ -902,25 +911,25 @@ onUnmounted(() => {
               <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
                 <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">AM ARRIVAL</span>
                 <span class="text-xs font-bold text-white font-mono mt-0.5">
-                  {{ currentShift?.am_arrival || '—' }}
+                  {{ hasAMIn ? currentShift?.am_arrival : '—' }}
                 </span>
               </div>
               <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
                 <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">AM DEPARTURE</span>
                 <span class="text-xs font-bold text-white font-mono mt-0.5">
-                  {{ currentShift?.am_departure || '—' }}
+                  {{ hasAMOut ? currentShift?.am_departure : '—' }}
                 </span>
               </div>
               <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
                 <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">PM ARRIVAL</span>
                 <span class="text-xs font-bold text-white font-mono mt-0.5">
-                  {{ currentShift?.pm_arrival || '—' }}
+                  {{ hasPMIn ? currentShift?.pm_arrival : '—' }}
                 </span>
               </div>
               <div class="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 flex flex-col">
                 <span class="text-[8px] font-bold text-[#858994] tracking-wider uppercase">PM DEPARTURE</span>
                 <span class="text-xs font-bold text-white font-mono mt-0.5">
-                  {{ currentShift?.pm_departure || '—' }}
+                  {{ hasPMOut ? currentShift?.pm_departure : '—' }}
                 </span>
               </div>
             </div>

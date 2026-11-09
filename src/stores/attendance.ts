@@ -18,7 +18,6 @@ export const useAttendanceStore = defineStore('attendance', () => {
     return hasAMIn.value && hasAMOut.value && hasPMIn.value && hasPMOut.value;
   });
 
-  // Helper para kalkulahin ang oras sa pagitan ng arrival at departure
   const calculateHoursBetween = (start: string | null, end: string | null): number => {
     if (!start || !end) return 0;
     try {
@@ -58,7 +57,15 @@ export const useAttendanceStore = defineStore('attendance', () => {
         .maybeSingle();
 
       if (error) throw error;
-      activeShift.value = (data as AttendanceLog) || null;
+      
+      // I-verify kung ang nakuha ay eksaktong para sa petsa ngayon
+      if (data && (data as AttendanceLog).date === today) {
+        activeShift.value = data as AttendanceLog;
+      } else {
+        // Kung walang record para sa araw ngayon (bagong araw na), i-reset ito sa null para handa sa bagong DTR row
+        activeShift.value = null;
+      }
+
       return activeShift.value;
     } catch (err: any) {
       console.error('Error fetching today attendance:', err.message);
@@ -95,7 +102,10 @@ export const useAttendanceStore = defineStore('attendance', () => {
       const today = now.toISOString().split('T')[0];
       const currentTimeIso = now.toTimeString().split(' ')[0];
 
-      if (!activeShift.value) {
+      const isShiftValidToday = activeShift.value && activeShift.value.date === today;
+
+      if (!isShiftValidToday) {
+        // Bagong araw / bagong row para sa ngayon
         const insertPayload: Record<string, any> = {
           intern_id: params.internId,
           date: today,
@@ -127,16 +137,16 @@ export const useAttendanceStore = defineStore('attendance', () => {
         const updatePayload: Record<string, any> = {};
         
         if (params.slot === 'am_arrival') {
-          if (activeShift.value.am_arrival) throw new Error('AM Arrival has already been recorded.');
+          if (activeShift.value?.am_arrival) throw new Error('AM Arrival has already been recorded.');
           updatePayload.am_arrival = currentTimeIso;
         } else if (params.slot === 'am_departure') {
-          if (activeShift.value.am_departure) throw new Error('AM Departure has already been recorded.');
+          if (activeShift.value?.am_departure) throw new Error('AM Departure has already been recorded.');
           updatePayload.am_departure = currentTimeIso;
         } else if (params.slot === 'pm_arrival') {
-          if (activeShift.value.pm_arrival) throw new Error('PM Arrival has already been recorded.');
+          if (activeShift.value?.pm_arrival) throw new Error('PM Arrival has already been recorded.');
           updatePayload.pm_arrival = currentTimeIso;
         } else if (params.slot === 'pm_departure') {
-          if (activeShift.value.pm_departure) throw new Error('PM Departure has already been recorded.');
+          if (activeShift.value?.pm_departure) throw new Error('PM Departure has already been recorded.');
           updatePayload.pm_departure = currentTimeIso;
         }
 
@@ -155,7 +165,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
         const { data, error } = await supabase
           .from('attendance_logs')
           .update(updatePayload)
-          .eq('id', activeShift.value.id)
+          .eq('id', activeShift.value!.id)
           .select()
           .single();
 
@@ -206,7 +216,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
       let targetLogId = params.logId;
 
       if (!targetLogId && params.internId) {
-        if (activeShift.value && activeShift.value.intern_id === params.internId) {
+        if (activeShift.value && activeShift.value.intern_id === params.internId && activeShift.value.date === today) {
           targetLogId = activeShift.value.id;
         } else {
           const { data: existingLog } = await supabase
