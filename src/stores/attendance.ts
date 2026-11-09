@@ -58,11 +58,9 @@ export const useAttendanceStore = defineStore('attendance', () => {
 
       if (error) throw error;
       
-      // I-verify kung ang nakuha ay eksaktong para sa petsa ngayon
       if (data && (data as AttendanceLog).date === today) {
         activeShift.value = data as AttendanceLog;
       } else {
-        // Kung walang record para sa araw ngayon (bagong araw na), i-reset ito sa null para handa sa bagong DTR row
         activeShift.value = null;
       }
 
@@ -105,7 +103,6 @@ export const useAttendanceStore = defineStore('attendance', () => {
       const isShiftValidToday = activeShift.value && activeShift.value.date === today;
 
       if (!isShiftValidToday) {
-        // Bagong araw / bagong row para sa ngayon
         const insertPayload: Record<string, any> = {
           intern_id: params.internId,
           date: today,
@@ -148,6 +145,7 @@ export const useAttendanceStore = defineStore('attendance', () => {
         } else if (params.slot === 'pm_departure') {
           if (activeShift.value?.pm_departure) throw new Error('PM Departure has already been recorded.');
           updatePayload.pm_departure = currentTimeIso;
+          updatePayload.status = 'in_transit'; // <--- BINAGO KO DITO: Awtomatikong nagiging in_transit pagkatapos ng PM Out[cite: 7]
         }
 
         if (params.latitude !== undefined) {
